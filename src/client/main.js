@@ -85,6 +85,9 @@ const DIR_EAST = 0; // +X
 const DX = [1, 0, -1, 0];
 const DY = [0, 1, 0, -1];
 
+const QUAD_X = [0, 0, 1, 1];
+const QUAD_Y = [0, 1, 1, 0];
+
 function gameStateCreate() {
   rand = randCreate(mashString('test'));
   let board = [];
@@ -202,22 +205,21 @@ function getCellFrame(cell, x, y, z) {
       break;
     case TYPE_CRAFT: {
       frame = 4; // note: in namespace of double-sized tiles
-      let { input0, input1, output } = cell;
-      sprites.tiles.draw({
-        x, y, z: z + 1,
-        frame: RESOURCE_FRAMES[input0],
-        color: color_craft_input,
-      });
-      sprites.tiles.draw({
-        x, y: y + TILE_SIZE, z: z + 1,
-        frame: RESOURCE_FRAMES[input1],
-        color: color_craft_input,
-      });
-      sprites.tiles.draw({
-        x: x + TILE_SIZE, y, z: z + 1,
-        frame: RESOURCE_FRAMES[output],
-        color: color_craft_input,
-      });
+      let { input0, input1, output, rot } = cell;
+      rot = rot || 0;
+      let resources = [input0, input1, null, output];
+      for (let ii = 0; ii < 4; ++ii) {
+        let r = resources[(ii + 4 - rot) % 4];
+        if (r !== null) {
+          sprites.tiles.draw({
+            x: x + QUAD_X[ii] * TILE_SIZE,
+            y: y + QUAD_Y[ii] * TILE_SIZE,
+            z: z + 1,
+            frame: RESOURCE_FRAMES[r],
+            color: color_craft_input,
+          });
+        }
+      }
     } break;
   }
   return { sprite, frame };
@@ -460,19 +462,23 @@ function canPlace(cell, x, y) {
   return true;
 }
 
-function clearCell(x, y) {
+function clearCell(x, y, just_sell) {
   let { board } = game_state;
   let cell = board[y][x];
   if (cell.resource && cell.type !== TYPE_SOURCE) {
     outputResource(cell.resource, x * TILE_SIZE, y * TILE_SIZE);
+    delete cell.resource;
   }
   let size = TYPE_SIZE[cell.type] || 1;
   for (let xx = 0; xx < size; ++xx) {
     for (let yy = 0; yy < size; ++yy) {
       if (xx || yy) {
-        clearCell(x + xx, y + yy);
+        clearCell(x + xx, y + yy, just_sell);
       }
     }
+  }
+  if (just_sell) {
+    return;
   }
   for (let key in cell) {
     delete cell[key];
@@ -581,12 +587,14 @@ function drawBoard(x0, y0, w, h) {
           button: 0, // left button only, right will sell structure
         })) {
           cell.rot = (cell.rot + 1) % 4;
-          // rotate resources too, if any
-          let t = board[yy][xx].resource;
-          board[yy][xx].resource = board[yy][xx+1].resource;
-          board[yy][xx+1].resource = board[yy+1][xx+1].resource;
-          board[yy+1][xx+1].resource = board[yy+1][xx].resource;
-          board[yy+1][xx].resource = t;
+          // sell all resources
+          clearCell(xx, yy, true);
+          // // rotate resources too, if any
+          // let t = board[yy][xx].resource;
+          // board[yy][xx].resource = board[yy][xx+1].resource;
+          // board[yy][xx+1].resource = board[yy+1][xx+1].resource;
+          // board[yy+1][xx+1].resource = board[yy+1][xx].resource;
+          // board[yy+1][xx].resource = t;
         }
       }
     }
@@ -646,6 +654,18 @@ function drawBoard(x0, y0, w, h) {
   if (game_state.cursor && !drew_cursor) {
     let mouse_pos = input.mousePos();
     drawCell(game_state.cursor.cell, mouse_pos[0] - TILE_SIZE/2, mouse_pos[1] - TILE_SIZE/2, Z.UI + 10, color_ghost);
+  }
+
+  if (game_state.cursor) {
+    let cell = game_state.cursor.cell;
+    if (TYPE_ROTATABLE[cell.type]) {
+      let wheel = input.mouseWheel();
+      if (wheel < 0) {
+        cell.rot = ((cell.rot || 0) + 1) % 4;
+      } else if (wheel > 0) {
+        cell.rot = ((cell.rot || 0) + 3) % 4;
+      }
+    }
   }
 }
 
