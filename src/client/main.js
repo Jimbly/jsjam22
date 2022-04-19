@@ -12,7 +12,7 @@ const { mashString, randCreate } = require('glov/common/rand_alea.js');
 const { createSprite } = require('glov/client/sprites.js');
 const { createSpriteAnimation } = require('glov/client/sprite_animation.js');
 const ui = require('glov/client/ui.js');
-const { lerp, easeInOut } = require('glov/common/util.js');
+const { clone, lerp, easeInOut } = require('glov/common/util.js');
 const { vec2, vec4 } = require('glov/common/vmath.js');
 
 window.Z = window.Z || {};
@@ -37,6 +37,11 @@ const TYPE_SOURCE = 2;
 const TYPE_SINK = 3;
 const TYPE_ROAD = 4;
 const TYPE_CRAFT = 5;
+
+const RESOURCE_WOOD = 1;
+const RESOURCE_FRAMES = {
+  [RESOURCE_WOOD]: 9,
+};
 
 const TYPE_PICKUPABLE = {
   [TYPE_SOURCE]: true,
@@ -98,6 +103,7 @@ function gameStateCreate() {
   let workers = [];
   workers.push({
     x: 2, y: 4, dir: DIR_EAST,
+    // carrying: RESOURCE_WOOD,
   });
   return {
     w, h,
@@ -180,6 +186,7 @@ const SHOP = [
     name: 'Tree',
     cell: {
       type: TYPE_SOURCE,
+      resource: RESOURCE_WOOD,
     },
   },
   {
@@ -302,6 +309,12 @@ function canPlace(cell, x, y) {
   return true;
 }
 
+function clearCell(cell) {
+  for (let key in cell) {
+    delete cell[key];
+  }
+}
+
 function drawBoard(x0, y0, w, h) {
   ui.drawRect2({ x: x0, y: y0, w, h, color: pico8.colors[11], z: Z.BACKGROUND });
 
@@ -325,17 +338,19 @@ function drawBoard(x0, y0, w, h) {
         x, y, w: TILE_SIZE, h: TILE_SIZE,
       })) {
         if (game_state.cursor && canPlace(game_state.cursor.cell, xx, yy)) {
-          cell.type = game_state.cursor.cell.type;
+          clearCell(cell);
+          for (let key in game_state.cursor.cell) {
+            cell[key] = game_state.cursor.cell[key];
+          }
           if (!input.keyDown(input.KEYS.SHIFT)) {
             game_state.cursor = null;
           }
         } else if (TYPE_PICKUPABLE[cell.type]) {
           refundCursor();
           game_state.cursor = {
-            cell: {
-              type: cell.type,
-            }
+            cell: clone(cell),
           };
+          clearCell(cell);
           cell.type = TYPE_EMPTY;
         }
       }
@@ -345,7 +360,7 @@ function drawBoard(x0, y0, w, h) {
   // draw workers
   for (let ii = 0; ii < workers.length; ++ii) {
     let worker = workers[ii];
-    let { x, y, lastx, lasty } = worker;
+    let { x, y, lastx, lasty, carrying } = worker;
     if (lastx !== undefined && tick_progress < 0.5) {
       let a = easeInOut(tick_progress * 2, 2);
       x = lerp(a, lastx, x);
@@ -357,6 +372,12 @@ function drawBoard(x0, y0, w, h) {
       x, y, z: Z.WORKERS,
       frame: 5,
     });
+    if (carrying) {
+      sprites.tiles.draw({
+        x, y: y - 8, z: Z.WORKERS + 1,
+        frame: RESOURCE_FRAMES[carrying],
+      });
+    }
   }
 
 
