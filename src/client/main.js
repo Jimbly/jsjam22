@@ -74,6 +74,7 @@ let rand;
 let game_state;
 
 const color_ghost = vec4(1, 1, 1, 0.8);
+const color_craft_input = vec4(1, 1, 1, 0.4);
 const color_invalid = vec4(1, 0, 0, 0.5);
 const colors_debug = ui.makeColorSet([1, 0.5, 1, 1]);
 
@@ -83,6 +84,9 @@ const DIR_EAST = 0; // +X
 // const DIR_NORTH = 3; // -Y
 const DX = [1, 0, -1, 0];
 const DY = [0, 1, 0, -1];
+
+const QUAD_X = [0, 0, 1, 1];
+const QUAD_Y = [0, 1, 1, 0];
 
 function gameStateCreate() {
   rand = randCreate(mashString('test'));
@@ -201,22 +205,21 @@ function getCellFrame(cell, x, y, z) {
       break;
     case TYPE_CRAFT: {
       frame = 4; // note: in namespace of double-sized tiles
-      let { input0, input1, output } = cell;
-      sprites.tiles.draw({
-        x, y, z: z + 1,
-        frame: RESOURCE_FRAMES[input0],
-        color: color_ghost,
-      });
-      sprites.tiles.draw({
-        x, y: y + TILE_SIZE, z: z + 1,
-        frame: RESOURCE_FRAMES[input1],
-        color: color_ghost,
-      });
-      sprites.tiles.draw({
-        x: x + TILE_SIZE, y, z: z + 1,
-        frame: RESOURCE_FRAMES[output],
-        color: color_ghost,
-      });
+      let { input0, input1, output, rot } = cell;
+      rot = rot || 0;
+      let resources = [input0, input1, null, output];
+      for (let ii = 0; ii < 4; ++ii) {
+        let r = resources[(ii + 4 - rot) % 4];
+        if (r !== null) {
+          sprites.tiles.draw({
+            x: x + QUAD_X[ii] * TILE_SIZE,
+            y: y + QUAD_Y[ii] * TILE_SIZE,
+            z: z + 0.5,
+            frame: RESOURCE_FRAMES[r],
+            color: color_craft_input,
+          });
+        }
+      }
     } break;
   }
   return { sprite, frame };
@@ -225,13 +228,14 @@ function getCellFrame(cell, x, y, z) {
 const ROT_OFFS_X = [0, 0, TILE_SIZE*2, TILE_SIZE*2];
 const ROT_OFFS_Y = [0, TILE_SIZE*2, TILE_SIZE*2, 0];
 function drawCell(cell, x, y, z, color) {
+  z = z || Z.BOARD;
   let { sprite, frame } = getCellFrame(cell, x, y, z);
   if (frame !== null) {
     let rot = cell.rot || 0;
     sprite.draw({
       x: x + ROT_OFFS_X[rot],
       y: y + ROT_OFFS_Y[rot],
-      z: z || Z.BOARD,
+      z,
       frame,
       color,
       rot: rot * -PI/2, // rotates counter-clockwise
@@ -349,10 +353,11 @@ function drawShop(x0, y0, w, h) {
       w: BUTTON_W,
       colors: elem.debug ? colors_debug : undefined,
     })) {
-      let same = game_state.cursor === elem;
+      let same = game_state.cursor && game_state.cursor.type === elem.type &&
+        game_state.cursor.resource === elem.resource;
       refundCursor();
       if (!same) {
-        game_state.cursor = elem;
+        game_state.cursor = clone(elem);
       }
     }
     y += button_h + PAD;
@@ -374,29 +379,44 @@ function typeAt(x, y) {
   return cell && cell.type || TYPE_EMPTY;
 }
 
-function crafterAcceptsResource(cell, resource) {
+function resourceMatches(cell, key, resource) {
   if (!cell || cell.type !== TYPE_CRAFT) {
     return false;
   }
-  return true;
+  if (cell[key] === resource) {
+    return true;
+  }
+  return false;
 }
 
 function craftingInputAt(x, y, resource) {
   let { board } = game_state;
   let cell = board[y][x];
-  if (crafterAcceptsResource(cell, resource) && (cell.rot === 3 || cell.rot === 0)) {
+  if (resourceMatches(cell, 'input0', resource) && cell.rot === 0) {
+    return true;
+  }
+  if (resourceMatches(cell, 'input1', resource) && cell.rot === 3) {
     return true;
   }
   cell = board[y][x-1];
-  if (crafterAcceptsResource(cell, resource) && (cell.rot === 2 || cell.rot === 3)) {
+  if (resourceMatches(cell, 'input0', resource) && cell.rot === 3) {
+    return true;
+  }
+  if (resourceMatches(cell, 'input1', resource) && cell.rot === 2) {
     return true;
   }
   cell = board[y-1]?.[x-1];
-  if (crafterAcceptsResource(cell, resource) && (cell.rot === 1 || cell.rot === 2)) {
+  if (resourceMatches(cell, 'input0', resource) && cell.rot === 2) {
+    return true;
+  }
+  if (resourceMatches(cell, 'input1', resource) && cell.rot === 1) {
     return true;
   }
   cell = board[y-1]?.[x];
-  if (crafterAcceptsResource(cell, resource) && (cell.rot === 0 || cell.rot === 1)) {
+  if (resourceMatches(cell, 'input0', resource) && cell.rot === 1) {
+    return true;
+  }
+  if (resourceMatches(cell, 'input1', resource) && cell.rot === 0) {
     return true;
   }
   return false;
@@ -459,19 +479,23 @@ function canPlace(cell, x, y) {
   return true;
 }
 
-function clearCell(x, y) {
+function clearCell(x, y, just_sell) {
   let { board } = game_state;
   let cell = board[y][x];
   if (cell.resource && cell.type !== TYPE_SOURCE) {
     outputResource(cell.resource, x * TILE_SIZE, y * TILE_SIZE);
+    delete cell.resource;
   }
   let size = TYPE_SIZE[cell.type] || 1;
   for (let xx = 0; xx < size; ++xx) {
     for (let yy = 0; yy < size; ++yy) {
       if (xx || yy) {
-        clearCell(x + xx, y + yy);
+        clearCell(x + xx, y + yy, just_sell);
       }
     }
+  }
+  if (just_sell) {
+    return;
   }
   for (let key in cell) {
     delete cell[key];
@@ -498,7 +522,7 @@ function drawBoard(x0, y0, w, h) {
     aout = easeOut(a, 2);
   }
 
-  function drawCarried(cell_or_worker, x, y) {
+  function drawCarried(cell_or_worker, x, y, z) {
     let { resource } = cell_or_worker;
     if (!resource) {
       return;
@@ -522,7 +546,7 @@ function drawBoard(x0, y0, w, h) {
       y += lerp(aout, DY[resource_from] * TILE_SIZE, 0);
     }
     sprites.tiles.draw({
-      x, y: y - 8, z: Z.WORKERS + 1,
+      x, y: y - 8, z: z + 2,
       frame: RESOURCE_FRAMES[resource],
     });
   }
@@ -540,7 +564,7 @@ function drawBoard(x0, y0, w, h) {
         x, y, w: TILE_SIZE * size, h: TILE_SIZE * size,
       };
       if (cell.type !== TYPE_SOURCE) {
-        drawCarried(cell, x, y);
+        drawCarried(cell, x, y, Z.BOARD);
       }
       if (game_state.cursor && canPlace(game_state.cursor.cell, xx, yy) && input.click(click_param)) {
         clearCell(xx, yy);
@@ -556,7 +580,9 @@ function drawBoard(x0, y0, w, h) {
         game_state.cursor = {
           cell: clone(cell),
         };
-        delete game_state.cursor.cell.resource;
+        if (game_state.cursor.cell.type !== TYPE_SOURCE) {
+          delete game_state.cursor.cell.resource;
+        }
         delete game_state.cursor.cell.resource_from;
         clearCell(xx, yy);
         cell.type = TYPE_EMPTY;
@@ -578,12 +604,14 @@ function drawBoard(x0, y0, w, h) {
           button: 0, // left button only, right will sell structure
         })) {
           cell.rot = (cell.rot + 1) % 4;
-          // rotate resources too, if any
-          let t = board[yy][xx].resource;
-          board[yy][xx].resource = board[yy][xx+1].resource;
-          board[yy][xx+1].resource = board[yy+1][xx+1].resource;
-          board[yy+1][xx+1].resource = board[yy+1][xx].resource;
-          board[yy+1][xx].resource = t;
+          // sell all resources
+          clearCell(xx, yy, true);
+          // // rotate resources too, if any
+          // let t = board[yy][xx].resource;
+          // board[yy][xx].resource = board[yy][xx+1].resource;
+          // board[yy][xx+1].resource = board[yy+1][xx+1].resource;
+          // board[yy+1][xx+1].resource = board[yy+1][xx].resource;
+          // board[yy+1][xx].resource = t;
         }
       }
     }
@@ -603,7 +631,7 @@ function drawBoard(x0, y0, w, h) {
       x, y, z: Z.WORKERS,
       frame: 5,
     });
-    drawCarried(worker, x, y);
+    drawCarried(worker, x, y, Z.WORKERS);
   }
 
 
@@ -643,6 +671,18 @@ function drawBoard(x0, y0, w, h) {
   if (game_state.cursor && !drew_cursor) {
     let mouse_pos = input.mousePos();
     drawCell(game_state.cursor.cell, mouse_pos[0] - TILE_SIZE/2, mouse_pos[1] - TILE_SIZE/2, Z.UI + 10, color_ghost);
+  }
+
+  if (game_state.cursor) {
+    let cell = game_state.cursor.cell;
+    if (TYPE_ROTATABLE[cell.type]) {
+      let wheel = input.mouseWheel();
+      if (wheel < 0) {
+        cell.rot = ((cell.rot || 0) + 1) % 4;
+      } else if (wheel > 0) {
+        cell.rot = ((cell.rot || 0) + 3) % 4;
+      }
+    }
   }
 }
 
