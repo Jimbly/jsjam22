@@ -178,9 +178,29 @@ function gameStateAddPattern(state, pattern, x, y) {
 
 function gameStateAddFirstLoop(state) {
   // loop road in center
-  let { w, h } = state;
+  let { w, h, board } = state;
   let pattern = patternLoop();
   gameStateAddPattern(state, pattern, floor((w - pattern.w) / 2), floor((h - pattern.h) / 2));
+  // Add an initial output sink
+  let output_spots = {};
+  for (let yy = 0; yy < board.length; ++yy) {
+    let row = board[yy];
+    for (let xx = 0; xx < row.length; ++xx) {
+      let cell = row[xx];
+      if (cell.type === TYPE_ROAD) {
+        for (let ii = 0; ii < DX.length; ++ii) {
+          let x2 = xx + DX[ii];
+          let y2 = yy + DY[ii];
+          if (board[y2][x2].type === TYPE_EMPTY || board[y2][x2].type === TYPE_DETAIL) {
+            output_spots[`${x2}_${y2}`] = [x2, y2];
+          }
+        }
+      }
+    }
+  }
+  let keys = Object.keys(output_spots);
+  let output_pos = output_spots[keys[rand.range(keys.length)]];
+  board[output_pos[1]][output_pos[0]].type = TYPE_SINK;
 }
 
 function gameStateCreate(seed) {
@@ -644,6 +664,38 @@ function craftingInputAt(x, y, resource) {
   return false;
 }
 
+function isCrafter(cell, rot) {
+  if (!cell || cell.type !== TYPE_CRAFT) {
+    return false;
+  }
+  return cell.rot === rot;
+}
+
+function craftingOutputAt(x, y) {
+  let { board } = game_state;
+  let cell = board[y][x];
+  let resource = cell.resource;
+  if (!resource) {
+    return 0;
+  }
+  if (isCrafter(cell, 1)) {
+    return resource;
+  }
+  cell = board[y][x-1];
+  if (isCrafter(cell, 0)) {
+    return resource;
+  }
+  cell = board[y-1]?.[x-1];
+  if (isCrafter(cell, 3)) {
+    return resource;
+  }
+  cell = board[y-1]?.[x];
+  if (isCrafter(cell, 2)) {
+    return resource;
+  }
+  return 0;
+}
+
 function canPlace(cell, x, y) {
   let size = TYPE_SIZE[cell.type] || 1;
   let { board } = game_state;
@@ -974,6 +1026,10 @@ function tickState() {
           worker.resource = board[ny][nx].resource;
           worker.resource_from = jj;
           continue outer;
+        } else if (craftingOutputAt(nx, ny)) {
+          worker.resource = craftingOutputAt(nx, ny);
+          delete board[ny][nx].resource;
+          worker.resource_from = jj;
         }
       }
     }
