@@ -597,7 +597,9 @@ function drawShop(x0, y0, w, h) {
     if (ui.buttonText({ x: x + w/3, y: y0 + h - ui.button_height, w: w/3, text: 'Save', colors: colors_debug })) {
       local_storage.setJSON('state', gameToJson(game_state));
     }
-    if (ui.buttonText({ x: x + w*2/3, y: y0 + h - ui.button_height, w: w/3, text: 'Load', colors: colors_debug })) {
+    if (ui.buttonText({ x: x + w*2/3, y: y0 + h - ui.button_height, w: w/3, text: 'Load', colors: colors_debug }) ||
+      engine.DEBUG && engine.frame_timestamp < 2000 && !game_state.num_ticks
+    ) {
       game_state = local_storage.getJSON('state');
       if (game_state.seed) {
         rand.importState(game_state.seed);
