@@ -32,6 +32,7 @@ const TYPE_DETAIL = 1;
 const TYPE_SOURCE = 2;
 const TYPE_SINK = 3;
 const TYPE_ROAD = 4;
+const TYPE_CRAFT = 5;
 
 const TYPE_PICKUPABLE = {
   [TYPE_SOURCE]: true,
@@ -40,6 +41,9 @@ const TYPE_PICKUPABLE = {
 const TYPE_OVERWRITABLE = {
   [TYPE_EMPTY]: true,
   [TYPE_DETAIL]: true,
+};
+const TYPE_SIZE = {
+  [TYPE_CRAFT]: 2,
 };
 
 let rand;
@@ -66,15 +70,6 @@ function gameStateCreate() {
     let y = rand.range(h);
     let cell = board[y][x];
     cell.type = TYPE_DETAIL;
-    cell.anim = createSpriteAnimation({
-      idle: {
-        frames: [2,3],
-        times: [500, 500],
-        times_random: [100, 100],
-      },
-    });
-    cell.anim.setState('idle');
-    cell.anim.update(rand.range(1000));
   }
   // 4x6 road at 2,4
   for (let ii = 0; ii < 4; ++ii) {
@@ -92,9 +87,15 @@ function gameStateCreate() {
 function init() {
   sprites.tiles = createSprite({
     name: 'tiles',
-    ws: [TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE],
+    ws: [TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE],
     hs: [TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE],
     size: vec2(TILE_SIZE, TILE_SIZE),
+  });
+  sprites.tiles_2x = createSprite({
+    name: 'tiles',
+    ws: [TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE],
+    hs: [TILE_SIZE, TILE_SIZE],
+    size: vec2(TILE_SIZE * 2, TILE_SIZE * 2),
   });
   sprites.tiles_ui = createSprite({
     name: 'tiles_ui',
@@ -106,13 +107,25 @@ function init() {
   game_state = gameStateCreate();
 }
 
-function drawCell(cell, x, y, z, color) {
+function getCellFrame(cell) {
+  let sprite = TYPE_SIZE[cell.type] === 2 ? sprites.tiles_2x : sprites.tiles;
   let frame = null;
   switch (cell.type) { // eslint-disable-line default-case
     case TYPE_ROAD:
       frame = 0;
       break;
     case TYPE_DETAIL:
+      if (!cell.anim) {
+        cell.anim = createSpriteAnimation({
+          idle: {
+            frames: [2,3],
+            times: [500, 500],
+            times_random: [100, 100],
+          },
+        });
+        cell.anim.setState('idle');
+        cell.anim.update(rand.range(1000));
+      }
       frame = cell.anim.getFrame(engine.frame_dt);
       break;
     case TYPE_SOURCE:
@@ -121,9 +134,17 @@ function drawCell(cell, x, y, z, color) {
     case TYPE_SINK:
       frame = 4;
       break;
+    case TYPE_CRAFT:
+      frame = 4; // note: 2x tile space
+      break;
   }
+  return { sprite, frame };
+}
+
+function drawCell(cell, x, y, z, color) {
+  let { sprite, frame } = getCellFrame(cell);
   if (frame !== null) {
-    sprites.tiles.draw({
+    sprite.draw({
       x, y, z: z || Z.BOARD, frame,
       color,
     });
@@ -135,14 +156,18 @@ const SHOP = [
     name: 'Tree',
     cell: {
       type: TYPE_SOURCE,
-      frame: 1,
     },
   },
   {
     name: 'Output',
     cell: {
       type: TYPE_SINK,
-      frame: 4,
+    },
+  },
+  {
+    name: 'Craft',
+    cell: {
+      type: TYPE_CRAFT,
     },
   },
 
@@ -150,7 +175,6 @@ const SHOP = [
     name: 'Debug',
     cell: {
       type: TYPE_ROAD,
-      frame: 0,
     },
     debug: true,
   },
@@ -177,16 +201,45 @@ function drawShop(x0, y0, w, h) {
     if (elem.debug && !engine.DEBUG) {
       continue;
     }
+    let { sprite, frame } = getCellFrame(elem.cell);
+    let scale = TYPE_SIZE[elem.cell.type] || 1;
+    let button_h = BUTTON_H + (scale - 1) * 16;
     if (ui.button({
-      x, y, img: sprites.tiles, frame: elem.cell.frame,
-      h: BUTTON_H,
+      x, y, img: sprite, frame,
+      h: button_h,
       w: BUTTON_W,
     })) {
       refundCursor();
       game_state.cursor = elem;
     }
-    y += BUTTON_H + PAD;
+    y += button_h + PAD;
   }
+}
+
+function canPlace(cell, x, y) {
+  let size = TYPE_SIZE[cell.type] || 1;
+  let { board } = game_state;
+  for (let yy = 0; yy < size; ++yy) {
+    for (let xx = 0; xx < size; ++xx) {
+      let target_cell = board[y + yy]?.[x + xx];
+      if (!target_cell) {
+        return false;
+      }
+      if (!TYPE_OVERWRITABLE[target_cell.type]) {
+        return false;
+      }
+    }
+  }
+  // check for neighboring 2x2s
+  for (let yy = -1; yy <= 0; ++yy) {
+    for (let xx = -1; xx <= 0; ++xx) {
+      let target_cell = board[y + yy]?.[x + xx];
+      if (target_cell && TYPE_SIZE[target_cell.type] === 2) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 function drawBoard(x0, y0, w, h) {
@@ -207,7 +260,7 @@ function drawBoard(x0, y0, w, h) {
       if (input.click({
         x, y, w: TILE_SIZE, h: TILE_SIZE,
       })) {
-        if (game_state.cursor && TYPE_OVERWRITABLE[cell.type]) {
+        if (game_state.cursor && canPlace(game_state.cursor.cell, xx, yy)) {
           cell.type = game_state.cursor.cell.type;
           if (!input.keyDown(input.KEYS.SHIFT)) {
             game_state.cursor = null;
@@ -235,8 +288,10 @@ function drawBoard(x0, y0, w, h) {
     if (cell) {
       if (game_state.cursor) {
         drew_cursor = true;
-        if (TYPE_OVERWRITABLE[cell.type]) {
-          drawCell(game_state.cursor.cell, x * TILE_SIZE, y * TILE_SIZE, Z.UI, color_ghost);
+        if (canPlace(game_state.cursor.cell, x, y)) {
+          if (TYPE_OVERWRITABLE[cell.type]) {
+            drawCell(game_state.cursor.cell, x * TILE_SIZE, y * TILE_SIZE, Z.UI, color_ghost);
+          }
         }
       } else if (cell && TYPE_PICKUPABLE[cell.type]) {
         sprites.tiles_ui.draw({
