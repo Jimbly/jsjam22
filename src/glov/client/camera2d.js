@@ -186,10 +186,10 @@ export function shift(dx, dy) {
 export function calcMap(out, src_rect, dest_rect) {
   let cur_w = data[11] - data[9];
   let cur_h = data[12] - data[10];
-  let vx0 = src_rect[0] / cur_w;
-  let vy0 = src_rect[1] / cur_h;
-  let vx1 = src_rect[2] / cur_w;
-  let vy1 = src_rect[3] / cur_h;
+  let vx0 = (src_rect[0] - data[0]) / cur_w;
+  let vy0 = (src_rect[1] - data[1]) / cur_h;
+  let vx1 = (src_rect[2] - data[0]) / cur_w;
+  let vy1 = (src_rect[3] - data[1]) / cur_h;
   let vw = vx1 - vx0;
   let vh = vy1 - vy0;
   let dest_vw = dest_rect[2] - dest_rect[0];

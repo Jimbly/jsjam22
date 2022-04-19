@@ -291,6 +291,7 @@ export function main() {
     viewport_postprocess: false,
     antialias: false,
     do_borders: true,
+    show_fps: false,
   })) {
     return;
   }
