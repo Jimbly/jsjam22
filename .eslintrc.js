@@ -1,4 +1,4 @@
-let ignore_style = false; // Set to true when editing other people's code
+let ignore_style = true; // Set to true when editing other people's code
 let relaxed = true; // Specific things I'm relaxing for convenience, probably not the best for readability
 
 module.exports = {

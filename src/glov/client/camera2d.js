@@ -198,6 +198,7 @@ export function calcMap(out, src_rect, dest_rect) {
   out[1] = dest_rect[1] - dest_vh / vh * vy0;
   out[2] = dest_rect[2] + dest_vw / vw * (1 - vx1);
   out[3] = dest_rect[3] + dest_vh / vh * (1 - vy1);
+  return out;
 }
 
 export function setNormalized() {
