@@ -36,6 +36,8 @@ let sprites = {};
 let particles;
 
 const TILE_SIZE = 16;
+const CARRY_OFFSET_SOURCE_SINK = 1;
+const CARRY_OFFSET_WORKER = 8;
 
 const TICK_TIME = 1000;
 
@@ -49,9 +51,11 @@ const TYPE_DEBUG_WORKER = 6;
 
 const RESOURCE_WOOD = 1;
 const RESOURCE_BERRY = 2;
+const RESOURCE_METAL = 3;
 const RESOURCE_FRAMES = {
   [RESOURCE_WOOD]: 9,
   [RESOURCE_BERRY]: 11,
+  [RESOURCE_METAL]: 27,
 };
 
 const TYPE_ROTATABLE = {
@@ -378,6 +382,9 @@ function getCellFrame(cell, x, y, z) {
         case RESOURCE_BERRY:
           frame = 3;
           break;
+        case RESOURCE_METAL:
+          frame = 26;
+          break;
         default:
           assert(0);
       }
@@ -441,6 +448,13 @@ const SHOP = [
     },
   },
   {
+    name: 'Metal mine',
+    cell: {
+      type: TYPE_SOURCE,
+      resource: RESOURCE_METAL,
+    },
+  },
+  {
     name: 'Output',
     cell: {
       type: TYPE_SINK,
@@ -452,7 +466,7 @@ const SHOP = [
       type: TYPE_CRAFT,
       input0: RESOURCE_WOOD,
       input1: RESOURCE_BERRY,
-      output: RESOURCE_WOOD,
+      output: RESOURCE_METAL,
     },
   },
 
@@ -507,11 +521,11 @@ function updateFloaters() {
 }
 
 // Assume x/y are in board camera space
-function outputResource(resource, x0, y0) {
+function outputResource(resource, x0, y0, offs) {
   game_state.resources[resource] = (game_state.resources[resource] || 0) + 1;
   addFloater(x0, y0, function (x, y, color) {
     sprites.tiles.draw({
-      x, y: y - 8, frame: RESOURCE_FRAMES[resource],
+      x, y: y - offs, frame: RESOURCE_FRAMES[resource],
       color,
     });
   });
@@ -694,7 +708,7 @@ function clearCell(x, y, just_sell) {
   let { board } = game_state;
   let cell = board[y][x];
   if (cell.resource && cell.type !== TYPE_SOURCE) {
-    outputResource(cell.resource, x * TILE_SIZE, y * TILE_SIZE);
+    outputResource(cell.resource, x * TILE_SIZE, y * TILE_SIZE, CARRY_OFFSET_SOURCE_SINK);
     delete cell.resource;
   }
   let size = TYPE_SIZE[cell.type] || 1;
@@ -733,14 +747,14 @@ function drawBoard(x0, y0, w, h) {
     aout = easeOut(a, 2);
   }
 
-  function drawCarried(cell_or_worker, x, y) {
+  function drawCarried(cell_or_worker, x, y, source_offset, target_offset) {
     let { resource } = cell_or_worker;
     if (!resource) {
       return;
     }
     let cell_param = { x, y, w: TILE_SIZE, h: TILE_SIZE };
     if (input.click(cell_param)) {
-      outputResource(resource, x, y);
+      outputResource(resource, x, y, target_offset);
       delete cell_or_worker.resource;
       return;
     }
@@ -752,12 +766,14 @@ function drawBoard(x0, y0, w, h) {
       });
     }
     let { resource_from } = cell_or_worker;
+    let offs = target_offset;
     if (resource_from !== undefined && a < 1) {
       x += lerp(aout, DX[resource_from] * TILE_SIZE, 0);
       y += lerp(aout, DY[resource_from] * TILE_SIZE, 0);
+      offs = lerp(aout, source_offset, target_offset);
     }
     sprites.tiles.draw({
-      x, y: y - 8, z: Z.WORKERS + 1,
+      x, y: y - offs, z: Z.WORKERS + 1,
       frame: RESOURCE_FRAMES[resource],
     });
   }
@@ -775,7 +791,7 @@ function drawBoard(x0, y0, w, h) {
         x, y, w: TILE_SIZE * size, h: TILE_SIZE * size,
       };
       if (cell.type !== TYPE_SOURCE) {
-        drawCarried(cell, x, y);
+        drawCarried(cell, x, y, CARRY_OFFSET_WORKER, CARRY_OFFSET_SOURCE_SINK);
       }
       if (game_state.cursor && canPlace(game_state.cursor.cell, xx, yy) && input.click(click_param)) {
         if (game_state.cursor.cell.type === TYPE_DEBUG_WORKER) {
@@ -849,7 +865,7 @@ function drawBoard(x0, y0, w, h) {
       x, y, z: Z.WORKERS,
       frame: 5,
     });
-    drawCarried(worker, x, y);
+    drawCarried(worker, x, y, CARRY_OFFSET_SOURCE_SINK, CARRY_OFFSET_WORKER);
   }
 
 
@@ -923,7 +939,7 @@ function tickState() {
       delete cell.resource_from;
       if (cell.type === TYPE_SINK) {
         if (cell.resource) {
-          outputResource(cell.resource, xx * TILE_SIZE, yy * TILE_SIZE);
+          outputResource(cell.resource, xx * TILE_SIZE, yy * TILE_SIZE, CARRY_OFFSET_SOURCE_SINK);
           delete cell.resource;
         }
       }
