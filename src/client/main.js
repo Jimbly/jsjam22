@@ -432,10 +432,24 @@ function canPlace(cell, x, y) {
   return true;
 }
 
-function clearCell(cell) {
+function clearCell(x, y) {
+  let { board } = game_state;
+  let cell = board[y][x];
+  if (cell.resource && cell.type !== TYPE_SOURCE) {
+    outputResource(cell.resource, x * TILE_SIZE, y * TILE_SIZE);
+  }
+  let size = TYPE_SIZE[cell.type] || 1;
+  for (let xx = 0; xx < size; ++xx) {
+    for (let yy = 0; yy < size; ++yy) {
+      if (xx || yy) {
+        clearCell(x + xx, y + yy);
+      }
+    }
+  }
   for (let key in cell) {
     delete cell[key];
   }
+  cell.type = TYPE_EMPTY;
 }
 
 function drawBoard(x0, y0, w, h) {
@@ -502,11 +516,11 @@ function drawBoard(x0, y0, w, h) {
         drawCarried(cell, x, y);
       }
       if (game_state.cursor && canPlace(game_state.cursor.cell, xx, yy) && input.click(click_param)) {
-        clearCell(cell);
+        clearCell(xx, yy);
         for (let key in game_state.cursor.cell) {
           cell[key] = game_state.cursor.cell[key];
         }
-        cell.rot = 0;
+        cell.rot = cell.rot || 0;
         if (!input.keyDown(KEYS.SHIFT)) {
           game_state.cursor = null;
         }
@@ -515,7 +529,9 @@ function drawBoard(x0, y0, w, h) {
         game_state.cursor = {
           cell: clone(cell),
         };
-        clearCell(cell);
+        delete game_state.cursor.cell.resource;
+        delete game_state.cursor.cell.resource_from;
+        clearCell(xx, yy);
         cell.type = TYPE_EMPTY;
       }
     }
