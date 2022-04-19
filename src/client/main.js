@@ -45,11 +45,17 @@ const TYPE_OVERWRITABLE = {
 const TYPE_SIZE = {
   [TYPE_CRAFT]: 2,
 };
+const TYPE_ROAD_ADJACENT = {
+  [TYPE_SOURCE]: true,
+  [TYPE_SINK]: true,
+  [TYPE_CRAFT]: true,
+};
 
 let rand;
 let game_state;
 
 const color_ghost = vec4(1, 1, 1, 0.8);
+const color_invalid = vec4(1, 0, 0, 0.5);
 
 function gameStateCreate() {
   rand = randCreate(mashString('test'));
@@ -216,6 +222,13 @@ function drawShop(x0, y0, w, h) {
   }
 }
 
+function typeAt(x, y) {
+  let cell = game_state.board[y]?.[x];
+  return cell && cell.type || TYPE_EMPTY;
+}
+
+const DX = [-1, 1, 0, 0];
+const DY = [0, 0, -1, 1];
 function canPlace(cell, x, y) {
   let size = TYPE_SIZE[cell.type] || 1;
   let { board } = game_state;
@@ -237,6 +250,37 @@ function canPlace(cell, x, y) {
       if (target_cell && TYPE_SIZE[target_cell.type] === 2) {
         return false;
       }
+    }
+  }
+  if (TYPE_ROAD_ADJACENT[cell.type]) {
+    let ok = false;
+    for (let ii = 0; ii < DX.length; ++ii) {
+      for (let jj = 0; jj < size; ++jj) {
+        let dx = DX[ii];
+        if (dx > 0) {
+          dx += size-1;
+        }
+        let dy = DY[ii];
+        if (dy > 0) {
+          dy += size-1;
+        }
+        if (typeAt(x + dx, y + dy) === TYPE_ROAD) {
+          ok = true;
+        }
+        if (size === 2) {
+          if (dx) {
+            dy++;
+          } else {
+            dx++;
+          }
+          if (typeAt(x + dx, y + dy) === TYPE_ROAD) {
+            ok = true;
+          }
+        }
+      }
+    }
+    if (!ok) {
+      return false;
     }
   }
   return true;
@@ -289,9 +333,9 @@ function drawBoard(x0, y0, w, h) {
       if (game_state.cursor) {
         drew_cursor = true;
         if (canPlace(game_state.cursor.cell, x, y)) {
-          if (TYPE_OVERWRITABLE[cell.type]) {
-            drawCell(game_state.cursor.cell, x * TILE_SIZE, y * TILE_SIZE, Z.UI, color_ghost);
-          }
+          drawCell(game_state.cursor.cell, x * TILE_SIZE, y * TILE_SIZE, Z.UI, color_ghost);
+        } else {
+          drawCell(game_state.cursor.cell, x * TILE_SIZE, y * TILE_SIZE, Z.UI, color_invalid);
         }
       } else if (cell && TYPE_PICKUPABLE[cell.type]) {
         sprites.tiles_ui.draw({
