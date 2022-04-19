@@ -14,7 +14,7 @@ const { createSprite } = require('glov/client/sprites.js');
 const { createSpriteAnimation } = require('glov/client/sprite_animation.js');
 const ui = require('glov/client/ui.js');
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-const { clone, lerp, easeInOut, easeIn, easeOut } = require('glov/common/util.js');
+const { clone, lerp, easeInOut, easeIn, easeOut, ridx } = require('glov/common/util.js');
 const { vec2, vec4 } = require('glov/common/vmath.js');
 
 window.Z = window.Z || {};
@@ -22,6 +22,7 @@ Z.BACKGROUND = 1;
 Z.BOARD = 10;
 Z.WORKERS = 20;
 Z.UI = 100;
+Z.FLOATERS = 200;
 
 // Virtual viewport for our game logic
 const game_width = 640;
@@ -108,7 +109,7 @@ function gameStateCreate() {
   let workers = [];
   workers.push({
     x: 2, y: 4, dir: DIR_EAST,
-    // carrying: RESOURCE_WOOD,
+    // resource: RESOURCE_WOOD,
   });
   return {
     w, h,
@@ -116,6 +117,7 @@ function gameStateCreate() {
     workers,
     tick_countdown: TICK_TIME,
     num_ticks: 0,
+    resources: {},
   };
 }
 
@@ -252,9 +254,42 @@ function refundCursor() {
   }
 }
 
+let floaters = [];
+function addFloater(x, y, f) {
+  floaters.push({
+    x, y,
+    start: engine.frame_timestamp,
+    f,
+  });
+}
+
+const FLOATER_TIME = 1000;
+const FLOATER_YOFFS = 16;
+let floater_color = vec4(1,1,1,1);
+function updateFloaters() {
+  for (let ii = floaters.length - 1; ii >= 0; --ii) {
+    let floater = floaters[ii];
+    let { x, y, start, f } = floater;
+    let p = (engine.frame_timestamp - start) / FLOATER_TIME;
+    if (p >= 1) {
+      ridx(floaters, ii);
+      continue;
+    }
+    p = easeOut(p, 2);
+    floater_color[3] = 1 - p;
+    f(x, y - p * FLOATER_YOFFS, floater_color);
+  }
+}
+
 // Assume x/y are in board camera space
-function outputResource(resource, x, y) {
-  // TODO
+function outputResource(resource, x0, y0) {
+  game_state.resources[resource] = (game_state.resources[resource] || 0) + 1;
+  addFloater(x0, y0, function (x, y, color) {
+    sprites.tiles.draw({
+      x, y: y - 8, frame: RESOURCE_FRAMES[resource],
+      color,
+    });
+  });
 }
 
 function drawShop(x0, y0, w, h) {
@@ -377,6 +412,43 @@ function drawBoard(x0, y0, w, h) {
 
   let { board, workers } = game_state;
   let tick_progress = 1 - game_state.tick_countdown / TICK_TIME;
+  let a = 1;
+  let ainout;
+  let aout;
+  if (tick_progress < 0.5) {
+    a = tick_progress * 2;
+    ainout = easeInOut(a, 2);
+    aout = easeOut(a, 2);
+  }
+
+  function drawCarried(cell_or_worker, x, y) {
+    let { resource } = cell_or_worker;
+    if (!resource) {
+      return;
+    }
+    let cell_param = { x, y, w: TILE_SIZE, h: TILE_SIZE };
+    if (input.click(cell_param)) {
+      outputResource(resource, x, y);
+      delete cell_or_worker.resource;
+      return;
+    }
+    if (input.mouseOver(cell_param)) {
+      sprites.tiles_ui.draw({
+        x, y: y - 8,
+        z: Z.UI,
+        frame: 1,
+      });
+    }
+    let { resource_from } = cell_or_worker;
+    if (resource_from !== undefined && a < 1) {
+      x += lerp(aout, DX[resource_from] * TILE_SIZE, 0);
+      y += lerp(aout, DY[resource_from] * TILE_SIZE, 0);
+    }
+    sprites.tiles.draw({
+      x, y: y - 8, z: Z.WORKERS + 1,
+      frame: RESOURCE_FRAMES[resource],
+    });
+  }
 
   // draw tiles
   for (let yy = 0; yy < board.length; ++yy) {
@@ -389,6 +461,7 @@ function drawBoard(x0, y0, w, h) {
       let click_param = {
         x, y, w: TILE_SIZE, h: TILE_SIZE,
       };
+      drawCarried(cell, x, y);
       if (game_state.cursor && canPlace(game_state.cursor.cell, xx, yy) && input.click(click_param)) {
         clearCell(cell);
         for (let key in game_state.cursor.cell) {
@@ -409,17 +482,9 @@ function drawBoard(x0, y0, w, h) {
   }
 
   // draw workers
-  let a = 1;
-  let ainout;
-  let aout;
-  if (tick_progress < 0.5) {
-    a = tick_progress * 2;
-    ainout = easeInOut(a, 2);
-    aout = easeOut(a, 2);
-  }
   for (let ii = 0; ii < workers.length; ++ii) {
     let worker = workers[ii];
-    let { x, y, lastx, lasty, carrying } = worker;
+    let { x, y, lastx, lasty } = worker;
     if (lastx !== undefined && a < 1) {
       x = lerp(ainout, lastx, x);
       y = lerp(ainout, lasty, y) + sin(ainout * PI) * -0.5;
@@ -430,30 +495,7 @@ function drawBoard(x0, y0, w, h) {
       x, y, z: Z.WORKERS,
       frame: 5,
     });
-    if (carrying) {
-      let cell_param = { x, y, w: TILE_SIZE, h: TILE_SIZE };
-      if (input.click(cell_param)) {
-        outputResource(carrying, x, y);
-        delete worker.carrying;
-      } else {
-        if (input.mouseOver(cell_param)) {
-          sprites.tiles_ui.draw({
-            x, y: y - 8,
-            z: Z.UI,
-            frame: 1,
-          });
-        }
-        let { resource_from } = worker;
-        if (resource_from !== undefined && a < 1) {
-          x += lerp(aout, DX[resource_from] * TILE_SIZE, 0);
-          y += lerp(aout, DY[resource_from] * TILE_SIZE, 0);
-        }
-        sprites.tiles.draw({
-          x, y: y - 8, z: Z.WORKERS + 1,
-          frame: RESOURCE_FRAMES[carrying],
-        });
-      }
-    }
+    drawCarried(worker, x, y);
   }
 
 
@@ -484,6 +526,8 @@ function drawBoard(x0, y0, w, h) {
     }
   }
 
+  updateFloaters();
+
   camera2d.pop();
 
   if (game_state.cursor && !drew_cursor) {
@@ -495,26 +539,54 @@ function drawBoard(x0, y0, w, h) {
 const BOUNCE_ORDER = [0, 1, 3, 2];
 function tickState() {
   let { board, workers } = game_state;
+
+  for (let yy = 0; yy < board.length; ++yy) {
+    let row = board[yy];
+    for (let xx = 0; xx < row.length; ++xx) {
+      let cell = row[xx];
+      delete cell.resource_from;
+      if (cell.type === TYPE_SINK) {
+        if (cell.resource) {
+          outputResource(cell.resource, xx * TILE_SIZE, yy * TILE_SIZE);
+          delete cell.resource;
+        }
+      }
+    }
+  }
+
   outer:
   for (let ii = 0; ii < workers.length; ++ii) {
     let worker = workers[ii];
     let { x, y, dir } = worker;
-    worker.lastx = undefined;
-    worker.resource_from = undefined;
-    if (!worker.carrying) {
+    delete worker.lastx;
+    delete worker.resource_from;
+    if (!worker.resource) {
       // check for pickup
       for (let jj = 0; jj < DX.length; ++jj) {
         let nx = x + DX[jj];
         let ny = y + DY[jj];
         if (typeAt(nx, ny) === TYPE_SOURCE) {
-          worker.carrying = board[ny][nx].resource;
+          worker.resource = board[ny][nx].resource;
           worker.resource_from = jj;
           continue outer;
         }
       }
     }
-    if (worker.carrying) {
+    if (worker.resource) {
       // check for drop off
+      for (let jj = 0; jj < DX.length; ++jj) {
+        let nx = x + DX[jj];
+        let ny = y + DY[jj];
+        if (typeAt(nx, ny) === TYPE_SINK) {
+          let target_cell = board[ny][nx];
+          if (!target_cell.resource) {
+            target_cell.resource = worker.resource;
+            delete worker.resource;
+            target_cell.resource_from = (jj + 2) % 4;
+            continue outer;
+          }
+        }
+      }
     }
     for (let jj = 0; jj < BOUNCE_ORDER.length; ++jj) {
       let dd = (dir + BOUNCE_ORDER[jj]) % 4;
