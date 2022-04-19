@@ -49,9 +49,11 @@ const TYPE_DEBUG_WORKER = 6;
 
 const RESOURCE_WOOD = 1;
 const RESOURCE_BERRY = 2;
+const RESOURCE_METAL = 3;
 const RESOURCE_FRAMES = {
   [RESOURCE_WOOD]: 9,
   [RESOURCE_BERRY]: 11,
+  [RESOURCE_METAL]: 27,
 };
 
 const TYPE_ROTATABLE = {
@@ -378,6 +380,9 @@ function getCellFrame(cell, x, y, z) {
         case RESOURCE_BERRY:
           frame = 3;
           break;
+        case RESOURCE_METAL:
+          frame = 26;
+          break;
         default:
           assert(0);
       }
@@ -441,6 +446,13 @@ const SHOP = [
     },
   },
   {
+    name: 'Metal mine',
+    cell: {
+      type: TYPE_SOURCE,
+      resource: RESOURCE_METAL,
+    },
+  },
+  {
     name: 'Output',
     cell: {
       type: TYPE_SINK,
@@ -452,7 +464,7 @@ const SHOP = [
       type: TYPE_CRAFT,
       input0: RESOURCE_WOOD,
       input1: RESOURCE_BERRY,
-      output: RESOURCE_WOOD,
+      output: RESOURCE_METAL,
     },
   },
 
