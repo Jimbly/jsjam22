@@ -270,7 +270,7 @@ module.exports = {
     "no-irregular-whitespace": "error",
     "no-iterator": "error",
     "no-label-var": "error",
-    "no-labels": "error",
+    "no-labels": "off", // JE
     "no-lone-blocks": "error",
     "no-lonely-if": "off", // JE
     "no-loop-func": "error",

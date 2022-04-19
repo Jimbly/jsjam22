@@ -358,13 +358,18 @@ function drawBoard(x0, y0, w, h) {
   }
 
   // draw workers
+  let a = 1;
+  let a2;
+  if (tick_progress < 0.5) {
+    a = tick_progress * 2;
+    a2 = easeInOut(a, 2);
+  }
   for (let ii = 0; ii < workers.length; ++ii) {
     let worker = workers[ii];
     let { x, y, lastx, lasty, carrying } = worker;
-    if (lastx !== undefined && tick_progress < 0.5) {
-      let a = easeInOut(tick_progress * 2, 2);
-      x = lerp(a, lastx, x);
-      y = lerp(a, lasty, y) + sin(a * PI) * -0.5;
+    if (lastx !== undefined && a < 1) {
+      x = lerp(a2, lastx, x);
+      y = lerp(a2, lasty, y) + sin(a2 * PI) * -0.5;
     }
     x *= TILE_SIZE;
     y *= TILE_SIZE;
@@ -373,6 +378,11 @@ function drawBoard(x0, y0, w, h) {
       frame: 5,
     });
     if (carrying) {
+      let { resource_from } = worker;
+      if (resource_from !== undefined && a < 1) {
+        x += lerp(a2, DX[resource_from] * TILE_SIZE, 0);
+        y += lerp(a2, DY[resource_from] * TILE_SIZE, 0);
+      }
       sprites.tiles.draw({
         x, y: y - 8, z: Z.WORKERS + 1,
         frame: RESOURCE_FRAMES[carrying],
@@ -418,10 +428,28 @@ function drawBoard(x0, y0, w, h) {
 
 const BOUNCE_ORDER = [0, 1, 3, 2];
 function tickState() {
-  let { workers } = game_state;
+  let { board, workers } = game_state;
+  outer:
   for (let ii = 0; ii < workers.length; ++ii) {
     let worker = workers[ii];
     let { x, y, dir } = worker;
+    worker.lastx = undefined;
+    worker.resource_from = undefined;
+    if (!worker.carrying) {
+      // check for pickup
+      for (let jj = 0; jj < DX.length; ++jj) {
+        let nx = x + DX[jj];
+        let ny = y + DY[jj];
+        if (typeAt(nx, ny) === TYPE_SOURCE) {
+          worker.carrying = board[ny][nx].resource;
+          worker.resource_from = jj;
+          continue outer;
+        }
+      }
+    }
+    if (worker.carrying) {
+      // check for drop off
+    }
     for (let jj = 0; jj < BOUNCE_ORDER.length; ++jj) {
       let dd = (dir + BOUNCE_ORDER[jj]) % 4;
       let destx = x + DX[dd];
@@ -429,10 +457,10 @@ function tickState() {
       if (typeAt(destx, desty) === TYPE_ROAD) {
         worker.lastx = x;
         worker.lasty = y;
-        worker.x = destx;
-        worker.y = desty;
+        x = worker.x = destx;
+        y = worker.y = desty;
         worker.dir = dd;
-        break;
+        continue outer;
       }
     }
   }
