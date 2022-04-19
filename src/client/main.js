@@ -708,7 +708,7 @@ function clearCell(x, y, just_sell) {
   let { board } = game_state;
   let cell = board[y][x];
   if (cell.resource && cell.type !== TYPE_SOURCE) {
-    outputResource(cell.resource, x * TILE_SIZE, y * TILE_SIZE, CARRY_OFFSET_SOURCE_SINK);
+    // outputResource(cell.resource, x * TILE_SIZE, y * TILE_SIZE, CARRY_OFFSET_SOURCE_SINK);
     delete cell.resource;
   }
   let size = TYPE_SIZE[cell.type] || 1;
@@ -754,15 +754,15 @@ function drawBoard(x0, y0, w, h) {
     }
     let cell_param = { x, y, w: TILE_SIZE, h: TILE_SIZE };
     if (input.click(cell_param)) {
-      outputResource(resource, x, y, target_offset);
+      // outputResource(resource, x, y, target_offset);
       delete cell_or_worker.resource;
       return;
     }
     if (input.mouseOver(cell_param)) {
       sprites.tiles_ui.draw({
-        x, y: y - 8,
+        x, y: y - target_offset,
         z: Z.UI,
-        frame: 1,
+        frame: 0,
       });
     }
     let { resource_from } = cell_or_worker;
