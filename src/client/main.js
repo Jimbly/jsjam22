@@ -6,6 +6,7 @@ const assert = require('assert');
 const camera2d = require('glov/client/camera2d.js');
 const engine = require('glov/client/engine.js');
 const input = require('glov/client/input.js');
+const { KEYS } = input;
 const { floor, max, sin, PI } = Math;
 const net = require('glov/client/net.js');
 const pico8 = require('glov/client/pico8.js');
@@ -353,6 +354,27 @@ function typeAt(x, y) {
   return cell && cell.type || TYPE_EMPTY;
 }
 
+function craftingInputAt(x, y) {
+  let { board } = game_state;
+  let cell = board[y][x];
+  if (cell && cell.type === TYPE_CRAFT && (cell.rot === 3 || cell.rot === 0)) {
+    return true;
+  }
+  cell = board[y][x-1];
+  if (cell && cell.type === TYPE_CRAFT && (cell.rot === 2 || cell.rot === 3)) {
+    return true;
+  }
+  cell = board[y-1][x-1];
+  if (cell && cell.type === TYPE_CRAFT && (cell.rot === 1 || cell.rot === 2)) {
+    return true;
+  }
+  cell = board[y-1][x];
+  if (cell && cell.type === TYPE_CRAFT && (cell.rot === 0 || cell.rot === 1)) {
+    return true;
+  }
+  return false;
+}
+
 function canPlace(cell, x, y) {
   let size = TYPE_SIZE[cell.type] || 1;
   let { board } = game_state;
@@ -464,7 +486,7 @@ function drawBoard(x0, y0, w, h) {
     });
   }
 
-  // draw tiles
+  // draw tiles, check sell resources, check sell structures
   for (let yy = 0; yy < board.length; ++yy) {
     let row = board[yy];
     for (let xx = 0; xx < row.length; ++xx) {
@@ -476,7 +498,7 @@ function drawBoard(x0, y0, w, h) {
       let click_param = {
         x, y, w: TILE_SIZE * size, h: TILE_SIZE * size,
       };
-      if (cell.type === TYPE_SINK || cell.type === TYPE_CRAFT) {
+      if (cell.type !== TYPE_SOURCE) {
         drawCarried(cell, x, y);
       }
       if (game_state.cursor && canPlace(game_state.cursor.cell, xx, yy) && input.click(click_param)) {
@@ -484,7 +506,8 @@ function drawBoard(x0, y0, w, h) {
         for (let key in game_state.cursor.cell) {
           cell[key] = game_state.cursor.cell[key];
         }
-        if (!input.keyDown(input.KEYS.SHIFT)) {
+        cell.rot = 0;
+        if (!input.keyDown(KEYS.SHIFT)) {
           game_state.cursor = null;
         }
       } else if (TYPE_PICKUPABLE[cell.type] && input.click({ ...click_param, button: 2 })) {
@@ -494,14 +517,31 @@ function drawBoard(x0, y0, w, h) {
         };
         clearCell(cell);
         cell.type = TYPE_EMPTY;
-      } else if (TYPE_ROTATABLE[cell.type] && input.click({ ...click_param, button: 0 })) {
-        cell.rot = (cell.rot + 1) % 4;
-        // rotate resources too, if any
-        let t = board[yy][xx].resource;
-        board[yy][xx].resource = board[yy][xx+1].resource;
-        board[yy][xx+1].resource = board[yy+1][xx+1].resource;
-        board[yy+1][xx+1].resource = board[yy+1][xx].resource;
-        board[yy+1][xx].resource = t;
+      }
+    }
+  }
+
+  // Check rotate after checking selling resources
+  for (let yy = 0; yy < board.length; ++yy) {
+    let row = board[yy];
+    for (let xx = 0; xx < row.length; ++xx) {
+      let cell = row[xx];
+      if (TYPE_ROTATABLE[cell.type]) {
+        let x = xx * TILE_SIZE;
+        let y = yy * TILE_SIZE;
+        let size = TYPE_SIZE[cell.type] || 1;
+        if (input.click({
+          x, y, w: TILE_SIZE * size, h: TILE_SIZE * size,
+          button: 0, // left button only, right will sell structure
+        })) {
+          cell.rot = (cell.rot + 1) % 4;
+          // rotate resources too, if any
+          let t = board[yy][xx].resource;
+          board[yy][xx].resource = board[yy][xx+1].resource;
+          board[yy][xx+1].resource = board[yy+1][xx+1].resource;
+          board[yy+1][xx+1].resource = board[yy+1][xx].resource;
+          board[yy+1][xx].resource = t;
+        }
       }
     }
   }
@@ -613,6 +653,15 @@ function tickState() {
             continue outer;
           }
         }
+        if (craftingInputAt(nx, ny)) {
+          let target_cell = board[ny][nx];
+          if (!target_cell.resource) {
+            target_cell.resource = worker.resource;
+            delete worker.resource;
+            target_cell.resource_from = (jj + 2) % 4;
+            continue outer;
+          }
+        }
       }
     }
     for (let jj = 0; jj < BOUNCE_ORDER.length; ++jj) {
@@ -633,6 +682,9 @@ function tickState() {
 
 function statePlay(dt) {
 
+  if (input.keyDown(KEYS.SHIFT)) {
+    dt *= 5;
+  }
   if (dt >= game_state.tick_countdown) {
     game_state.tick_countdown = max(TICK_TIME/2, TICK_TIME - (dt - game_state.tick_countdown));
     game_state.num_ticks++;
