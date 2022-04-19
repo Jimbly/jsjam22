@@ -163,7 +163,7 @@ function refundCursor() {
 }
 function drawShop(x0, y0, w, h) {
   const PAD = 4;
-  const BUTTON_H = 26;
+  const BUTTON_H = 22;
   const BUTTON_W = 48;
   let x = x0;
   let y = y0;
@@ -273,7 +273,7 @@ export function main() {
   const font_info_04b03x2 = require('./img/font/04b03_8x2.json');
   const font_info_04b03x1 = require('./img/font/04b03_8x1.json');
   const font_info_palanquin32 = require('./img/font/palanquin32.json');
-  let pixely = 'on';
+  let pixely = 'strict';
   let font;
   if (pixely === 'strict') {
     font = { info: font_info_04b03x1, texture: 'font/04b03_8x1' };
@@ -292,12 +292,17 @@ export function main() {
     antialias: false,
     do_borders: true,
     show_fps: false,
+    ui_sprites: {
+      button: ['ui/button', [4,14,4], [22]],
+      button_down: ['ui/button_down', [4,14,4], [22]],
+      button_disabled: ['ui/button_disabled', [4,14,4], [22]],
+    },
   })) {
     return;
   }
   font = engine.font;
 
-  ui.scaleSizes(26 / 32);
+  ui.scaleSizes(22 / 32);
   ui.setFontHeight(16);
 
   init();
