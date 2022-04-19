@@ -214,7 +214,7 @@ function getCellFrame(cell, x, y, z) {
           sprites.tiles.draw({
             x: x + QUAD_X[ii] * TILE_SIZE,
             y: y + QUAD_Y[ii] * TILE_SIZE,
-            z: z + 1,
+            z: z + 0.5,
             frame: RESOURCE_FRAMES[r],
             color: color_craft_input,
           });
@@ -228,13 +228,14 @@ function getCellFrame(cell, x, y, z) {
 const ROT_OFFS_X = [0, 0, TILE_SIZE*2, TILE_SIZE*2];
 const ROT_OFFS_Y = [0, TILE_SIZE*2, TILE_SIZE*2, 0];
 function drawCell(cell, x, y, z, color) {
+  z = z || Z.BOARD;
   let { sprite, frame } = getCellFrame(cell, x, y, z);
   if (frame !== null) {
     let rot = cell.rot || 0;
     sprite.draw({
       x: x + ROT_OFFS_X[rot],
       y: y + ROT_OFFS_Y[rot],
-      z: z || Z.BOARD,
+      z,
       frame,
       color,
       rot: rot * -PI/2, // rotates counter-clockwise
@@ -521,7 +522,7 @@ function drawBoard(x0, y0, w, h) {
     aout = easeOut(a, 2);
   }
 
-  function drawCarried(cell_or_worker, x, y) {
+  function drawCarried(cell_or_worker, x, y, z) {
     let { resource } = cell_or_worker;
     if (!resource) {
       return;
@@ -545,7 +546,7 @@ function drawBoard(x0, y0, w, h) {
       y += lerp(aout, DY[resource_from] * TILE_SIZE, 0);
     }
     sprites.tiles.draw({
-      x, y: y - 8, z: Z.WORKERS + 1,
+      x, y: y - 8, z: z + 2,
       frame: RESOURCE_FRAMES[resource],
     });
   }
@@ -563,7 +564,7 @@ function drawBoard(x0, y0, w, h) {
         x, y, w: TILE_SIZE * size, h: TILE_SIZE * size,
       };
       if (cell.type !== TYPE_SOURCE) {
-        drawCarried(cell, x, y);
+        drawCarried(cell, x, y, Z.BOARD);
       }
       if (game_state.cursor && canPlace(game_state.cursor.cell, xx, yy) && input.click(click_param)) {
         clearCell(xx, yy);
@@ -630,7 +631,7 @@ function drawBoard(x0, y0, w, h) {
       x, y, z: Z.WORKERS,
       frame: 5,
     });
-    drawCarried(worker, x, y);
+    drawCarried(worker, x, y, Z.WORKERS);
   }
 
 
