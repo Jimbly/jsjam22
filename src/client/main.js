@@ -33,10 +33,19 @@ const TYPE_SOURCE = 2;
 const TYPE_SINK = 3;
 const TYPE_ROAD = 4;
 
+const TYPE_PICKUPABLE = {
+  [TYPE_SOURCE]: true,
+  [TYPE_SINK]: true,
+};
+const TYPE_OVERWRITABLE = {
+  [TYPE_EMPTY]: true,
+  [TYPE_DETAIL]: true,
+};
+
 let rand;
 let game_state;
 
-const color_ghost = vec4(1, 1, 1, 0.5);
+const color_ghost = vec4(1, 1, 1, 0.8);
 
 function gameStateCreate() {
   rand = randCreate(mashString('test'));
@@ -87,8 +96,38 @@ function init() {
     hs: [TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE],
     size: vec2(TILE_SIZE, TILE_SIZE),
   });
+  sprites.tiles_ui = createSprite({
+    name: 'tiles_ui',
+    ws: [TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE],
+    hs: [TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE],
+    size: vec2(TILE_SIZE, TILE_SIZE),
+  });
 
   game_state = gameStateCreate();
+}
+
+function drawCell(cell, x, y, z, color) {
+  let frame = null;
+  switch (cell.type) { // eslint-disable-line default-case
+    case TYPE_ROAD:
+      frame = 0;
+      break;
+    case TYPE_DETAIL:
+      frame = cell.anim.getFrame(engine.frame_dt);
+      break;
+    case TYPE_SOURCE:
+      frame = 1;
+      break;
+    case TYPE_SINK:
+      frame = 4;
+      break;
+  }
+  if (frame !== null) {
+    sprites.tiles.draw({
+      x, y, z: z || Z.BOARD, frame,
+      color,
+    });
+  }
 }
 
 const SHOP = [
@@ -116,6 +155,12 @@ const SHOP = [
     debug: true,
   },
 ];
+function refundCursor() {
+  if (game_state.cursor) {
+    // TODO: refund
+    game_state.cursor = null;
+  }
+}
 function drawShop(x0, y0, w, h) {
   const PAD = 4;
   const BUTTON_H = 26;
@@ -137,9 +182,7 @@ function drawShop(x0, y0, w, h) {
       h: BUTTON_H,
       w: BUTTON_W,
     })) {
-      if (game_state.cursor) {
-        // return funds
-      }
+      refundCursor();
       game_state.cursor = elem;
     }
     y += BUTTON_H + PAD;
@@ -147,7 +190,6 @@ function drawShop(x0, y0, w, h) {
 }
 
 function drawBoard(x0, y0, w, h) {
-  const dt = engine.getFrameDt();
   ui.drawRect2({ x: x0, y: y0, w, h, color: pico8.colors[11], z: Z.BACKGROUND });
 
   camera2d.push();
@@ -161,50 +203,58 @@ function drawBoard(x0, y0, w, h) {
       let cell = row[xx];
       let x = xx * TILE_SIZE;
       let y = yy * TILE_SIZE;
-      let frame = null;
-      switch (cell.type) { // eslint-disable-line default-case
-        case TYPE_ROAD:
-          frame = 0;
-          break;
-        case TYPE_DETAIL:
-          frame = cell.anim.getFrame(dt);
-          break;
-      }
-      if (frame !== null) {
-        sprites.tiles.draw({
-          x, y, z: Z.BOARD, frame,
-        });
-      }
+      drawCell(cell, x, y);
       if (input.click({
         x, y, w: TILE_SIZE, h: TILE_SIZE,
       })) {
-        if (game_state.cursor) {
+        if (game_state.cursor && TYPE_OVERWRITABLE[cell.type]) {
           cell.type = game_state.cursor.cell.type;
           if (!input.keyDown(input.KEYS.SHIFT)) {
             game_state.cursor = null;
           }
+        } else if (TYPE_PICKUPABLE[cell.type]) {
+          refundCursor();
+          game_state.cursor = {
+            cell: {
+              type: cell.type,
+            }
+          };
+          cell.type = TYPE_EMPTY;
         }
       }
     }
   }
   let mouse_over = input.mouseOver({ x: 0, y: 0, w, h });
-  if (game_state.cursor) {
-    if (mouse_over) {
-      let mouse_pos = input.mousePos();
+  let drew_cursor = false;
+  if (mouse_over) {
+    let mouse_pos = input.mousePos();
 
-      let x = floor(mouse_pos[0] / TILE_SIZE);
-      let y = floor(mouse_pos[1] / TILE_SIZE);
-      sprites.tiles.draw({
-        x: x * TILE_SIZE,
-        y: y * TILE_SIZE,
-        z: Z.UI,
-        color: color_ghost,
-        frame: game_state.cursor.cell.frame,
-      });
+    let x = floor(mouse_pos[0] / TILE_SIZE);
+    let y = floor(mouse_pos[1] / TILE_SIZE);
+    let cell = board[y]?.[x];
+    if (cell) {
+      if (game_state.cursor) {
+        drew_cursor = true;
+        if (TYPE_OVERWRITABLE[cell.type]) {
+          drawCell(game_state.cursor.cell, x * TILE_SIZE, y * TILE_SIZE, Z.UI, color_ghost);
+        }
+      } else if (cell && TYPE_PICKUPABLE[cell.type]) {
+        sprites.tiles_ui.draw({
+          x: x * TILE_SIZE,
+          y: y * TILE_SIZE,
+          z: Z.UI,
+          frame: 0,
+        });
+      }
     }
   }
 
   camera2d.pop();
+
+  if (game_state.cursor && !drew_cursor) {
+    let mouse_pos = input.mousePos();
+    drawCell(game_state.cursor.cell, mouse_pos[0] - TILE_SIZE/2, mouse_pos[1] - TILE_SIZE/2, Z.UI + 10, color_ghost);
+  }
 }
 
 function statePlay(dt) {
