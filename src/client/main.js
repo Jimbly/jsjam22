@@ -45,6 +45,7 @@ const TYPE_SOURCE = 2;
 const TYPE_SINK = 3;
 const TYPE_ROAD = 4;
 const TYPE_CRAFT = 5;
+const TYPE_DEBUG_WORKER = 6;
 
 const RESOURCE_WOOD = 1;
 const RESOURCE_BERRY = 2;
@@ -179,6 +180,9 @@ function getCellFrame(cell, x, y, z) {
   let sprite = TYPE_SIZE[cell.type] === 2 ? sprites.tiles_2x : sprites.tiles;
   let frame = null;
   switch (cell.type) { // eslint-disable-line default-case
+    case TYPE_DEBUG_WORKER:
+      frame = 5;
+      break;
     case TYPE_ROAD:
       frame = 0;
       break;
@@ -286,6 +290,13 @@ const SHOP = [
     name: 'Debug',
     cell: {
       type: TYPE_ROAD,
+    },
+    debug: true,
+  },
+  {
+    name: 'Debug',
+    cell: {
+      type: TYPE_DEBUG_WORKER,
     },
     debug: true,
   },
@@ -443,6 +454,9 @@ function craftingInputAt(x, y, resource) {
 function canPlace(cell, x, y) {
   let size = TYPE_SIZE[cell.type] || 1;
   let { board } = game_state;
+  if (cell.type === TYPE_DEBUG_WORKER) {
+    return board[y][x].type === TYPE_ROAD;
+  }
   for (let yy = 0; yy < size; ++yy) {
     for (let xx = 0; xx < size; ++xx) {
       let target_cell = board[y + yy]?.[x + xx];
@@ -585,11 +599,18 @@ function drawBoard(x0, y0, w, h) {
         drawCarried(cell, x, y);
       }
       if (game_state.cursor && canPlace(game_state.cursor.cell, xx, yy) && input.click(click_param)) {
-        clearCell(xx, yy);
-        for (let key in game_state.cursor.cell) {
-          cell[key] = game_state.cursor.cell[key];
+        if (game_state.cursor.cell.type === TYPE_DEBUG_WORKER) {
+          game_state.workers.push({
+            x: xx, y: yy,
+            dir: DIR_EAST,
+          });
+        } else {
+          clearCell(xx, yy);
+          for (let key in game_state.cursor.cell) {
+            cell[key] = game_state.cursor.cell[key];
+          }
+          cell.rot = cell.rot || 0;
         }
-        cell.rot = cell.rot || 0;
         if (!input.keyDown(KEYS.SHIFT)) {
           game_state.cursor = null;
         }
