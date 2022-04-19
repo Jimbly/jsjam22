@@ -352,10 +352,11 @@ function drawShop(x0, y0, w, h) {
       w: BUTTON_W,
       colors: elem.debug ? colors_debug : undefined,
     })) {
-      let same = game_state.cursor === elem;
+      let same = game_state.cursor && game_state.cursor.type === elem.type &&
+        game_state.cursor.resource === elem.resource;
       refundCursor();
       if (!same) {
-        game_state.cursor = elem;
+        game_state.cursor = clone(elem);
       }
     }
     y += button_h + PAD;
