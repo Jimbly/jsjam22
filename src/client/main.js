@@ -83,20 +83,106 @@ const color_craft_input = vec4(1, 1, 1, 0.4);
 const color_invalid = vec4(1, 0, 0, 0.5);
 const colors_debug = ui.makeColorSet([1, 0.5, 1, 1]);
 
-const DIR_EAST = 0; // +X
+// const DIR_EAST = 0; // +X
 // const DIR_SOUTH = 1; // +Y
 // const DIR_WEST = 2; // -X
 // const DIR_NORTH = 3; // -Y
 const DX = [1, 0, -1, 0];
 const DY = [0, 1, 0, -1];
+// const DXY = [[1,0], [0,1], [-1,0], [0,-1]];
+const DXY3 = [[3,0], [0,3], [-3,0], [0,-3]];
 
 const QUAD_X = [0, 0, 1, 1];
 const QUAD_Y = [0, 1, 1, 0];
 
-function gameStateCreate() {
-  rand = randCreate(mashString('test'));
+function patternLoop() {
+  let w = 4 + rand.range(3);
+  let h = 4 + rand.range(3);
+  if (w > 4 && h > 4) {
+    if (rand.range(2)) {
+      w = 4;
+    } else {
+      h = 4;
+    }
+  }
+  let ret = [];
+  for (let yy = 0; yy < h; ++yy) {
+    let row = [];
+    for (let xx = 0; xx < w; ++xx) {
+      if (!xx || !yy || xx === w - 1 || yy === h - 1) {
+        row.push(1);
+      } else {
+        row.push(0);
+      }
+    }
+    ret.push(row);
+  }
+  ret.w = w;
+  ret.h = h;
+  return ret;
+}
+
+function patternBend() {
+  let w = 4 + rand.range(3);
+  let h = 4 + rand.range(3);
+  if (w > 4 && h > 4) {
+    if (rand.range(2)) {
+      w = 4;
+    } else {
+      h = 4;
+    }
+  }
+  let x = rand.range(2) * (w - 1);
+  let y = rand.range(2) * (h - 1);
+  let ret = [];
+  for (let yy = 0; yy < h; ++yy) {
+    let row = [];
+    for (let xx = 0; xx < w; ++xx) {
+      if (xx === x || yy === y) {
+        row.push(1);
+      } else {
+        row.push(0);
+      }
+    }
+    ret.push(row);
+  }
+  ret.w = w;
+  ret.h = h;
+  return ret;
+}
+
+function gameStateAddPattern(state, pattern, x, y) {
+  let { board, workers } = state;
+  let locations = [];
+  for (let yy = 0; yy < pattern.length; ++yy) {
+    let row = pattern[yy];
+    for (let xx = 0; xx < row.length; ++xx) {
+      if (row[xx]) {
+        let cell = board[y + yy][x + xx];
+        assert(cell.type === TYPE_EMPTY || cell.type === TYPE_DETAIL);
+        cell.type = TYPE_ROAD;
+        locations.push([x+xx, y+yy]);
+      }
+    }
+  }
+  let worker_pos = locations[rand.range(locations.length)];
+  workers.push({
+    x: worker_pos[0], y: worker_pos[1],
+    dir: rand.range(4),
+  });
+}
+
+function gameStateAddFirstLoop(state) {
+  // loop road in center
+  let { w, h } = state;
+  let pattern = patternLoop();
+  gameStateAddPattern(state, pattern, floor((w - pattern.w) / 2), floor((h - pattern.h) / 2));
+}
+
+function gameStateCreate(seed) {
+  rand = randCreate(mashString(seed));
   let board = [];
-  let w = 24;
+  let w = 30;
   let h = 24;
   for (let yy = 0; yy < h; ++yy) {
     let row = [];
@@ -115,19 +201,8 @@ function gameStateCreate() {
     let cell = board[y][x];
     cell.type = TYPE_DETAIL;
   }
-  // 4x6 road at 2,4
-  for (let ii = 0; ii < 4; ++ii) {
-    board[4][2+ii].type = TYPE_ROAD;
-    board[9][2+ii].type = TYPE_ROAD;
-    board[5+ii][2].type = TYPE_ROAD;
-    board[5+ii][5].type = TYPE_ROAD;
-  }
   let workers = [];
-  workers.push({
-    x: 2, y: 4, dir: DIR_EAST,
-    // resource: RESOURCE_WOOD,
-  });
-  return {
+  let state = {
     w, h,
     board,
     workers,
@@ -135,6 +210,100 @@ function gameStateCreate() {
     num_ticks: 0,
     resources: {},
   };
+  gameStateAddFirstLoop(state);
+  return state;
+}
+
+function randomRoadPattern() {
+  let type = rand.range(2);
+  if (type === 0) {
+    return patternLoop();
+  } else if (type === 1) {
+    return patternBend();
+  }
+  assert(false);
+  return null;
+}
+
+function boardIsRoadDelta(board, x, y, delta) {
+  x += delta[0];
+  y += delta[1];
+  if (x < 0 || x >= board[0].length || y < 0 || y >= board.length) {
+    return false;
+  }
+  return board[y][x].type === TYPE_ROAD;
+}
+
+const PATTERN_OUTSIDE_PAD = 1; // space required between pattern and outer edge of map
+const PATTERN_MASK_NO = [
+  [-2, -1], [-2, 0], [-2, 1],
+  [-1, -2], [-1, -1], [-1, 0], [-1, 1], [-1, 2],
+  [0, -2], [0, -1], [0, 0], [0, 1], [0, 2],
+  [1, -2], [1, -1], [1, 0], [1, 1], [1, 2],
+  [2, -1], [2, 0], [2, 1],
+];
+function patternFits(state, pattern, pat_x, pat_y) {
+  let { w, h, board } = state;
+  let { w: pat_w, h: pat_h } = pattern;
+  if (pat_x < PATTERN_OUTSIDE_PAD || pat_y < PATTERN_OUTSIDE_PAD ||
+    pat_x + pat_w > w - PATTERN_OUTSIDE_PAD || pat_y + pat_h > h - PATTERN_OUTSIDE_PAD
+  ) {
+    return false;
+  }
+  let neighbor_matches = 0;
+  for (let yy = 0; yy < pat_h; ++yy) {
+    let row = pattern[yy];
+    let test_y = pat_y + yy;
+    for (let xx = 0; xx < pat_w; ++xx) {
+      if (row[xx]) {
+        let test_x = pat_x + xx;
+        // ensure nothing within the mask
+        for (let ii = 0; ii < PATTERN_MASK_NO.length; ++ii) {
+          if (boardIsRoadDelta(board, test_x, test_y, PATTERN_MASK_NO[ii])) {
+            return false;
+          }
+        }
+        // check if we have a 2-away other road
+        for (let ii = 0; ii < DX.length; ++ii) {
+          if (boardIsRoadDelta(board, test_x, test_y, DXY3[ii])) {
+            neighbor_matches++;
+            break;
+          }
+        }
+      }
+    }
+  }
+  if (neighbor_matches < 2) {
+    return false;
+  }
+  return true;
+}
+
+function gameStateAddRoad(state) {
+  let { w, h } = state;
+  for (let iter = 0; iter < 1000; ++iter) {
+    let pattern = randomRoadPattern();
+
+    let edge = rand.range(4);
+    let x = edge === 0 ? 1 : edge === 2 ? w - pattern.w - 1 :
+      1 + rand.range(w - pattern.w - 2);
+    let y = edge === 1 ? 1 : edge === 3 ? h - pattern.h - 1 :
+      1 + rand.range(h - pattern.h - 2);
+    let max_iter = max(w, h) / 2;
+    for (let ii = 0; ii < max_iter; ++ii) {
+      if (patternFits(state, pattern, x, y)) {
+        gameStateAddPattern(state, pattern, x, y);
+        return;
+      }
+      x += DX[edge];
+      y += DY[edge];
+    }
+  }
+  ui.modalDialog({
+    title: 'Error',
+    text: 'Could not find any valid road placement',
+    buttons: { OK: null },
+  });
 }
 
 function gameToJson(state) {
@@ -147,6 +316,7 @@ function gameToJson(state) {
       delete cell.anim;
     }
   }
+  ret.seed = rand.exportState();
   return ret;
 }
 
@@ -172,7 +342,7 @@ function init() {
 
   preloadParticleData(particle_data);
 
-  game_state = gameStateCreate();
+  game_state = gameStateCreate('test');
 }
 
 // Also draws details not included in base sprite
@@ -384,11 +554,20 @@ function drawShop(x0, y0, w, h) {
 
 
   if (engine.DEBUG) {
-    if (ui.buttonText({ x, y: y0 + h - ui.button_height, w: w/2, text: 'Save', colors: colors_debug })) {
+    if (ui.buttonText({ x, y: y0 + h - ui.button_height * 2 - PAD, w: w/3, text: '+Road', colors: colors_debug })) {
+      gameStateAddRoad(game_state);
+    }
+    if (ui.buttonText({ x, y: y0 + h - ui.button_height, w: w/3, text: 'New', colors: colors_debug })) {
+      game_state = gameStateCreate(String(Math.random()));
+    }
+    if (ui.buttonText({ x: x + w/3, y: y0 + h - ui.button_height, w: w/3, text: 'Save', colors: colors_debug })) {
       local_storage.setJSON('state', gameToJson(game_state));
     }
-    if (ui.buttonText({ x: x + w/2, y: y0 + h - ui.button_height, w: w/2, text: 'Load', colors: colors_debug })) {
+    if (ui.buttonText({ x: x + w*2/3, y: y0 + h - ui.button_height, w: w/3, text: 'Load', colors: colors_debug })) {
       game_state = local_storage.getJSON('state');
+      if (game_state.seed) {
+        rand.importState(game_state.seed);
+      }
       // Fixup old data
       let { board } = game_state;
       for (let yy = 0; yy < board.length; ++yy) {
@@ -602,7 +781,7 @@ function drawBoard(x0, y0, w, h) {
         if (game_state.cursor.cell.type === TYPE_DEBUG_WORKER) {
           game_state.workers.push({
             x: xx, y: yy,
-            dir: DIR_EAST,
+            dir: rand.range(4),
           });
         } else {
           clearCell(xx, yy);
