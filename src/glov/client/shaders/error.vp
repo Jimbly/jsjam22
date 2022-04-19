@@ -1,0 +1,7 @@
+// Portions Copyright 2019 Jimb Esser (https://github.com/Jimbly/)
+// Released under MIT License: https://opensource.org/licenses/MIT
+#pragma WebGL
+attribute vec2 POSITION;
+void main() {
+  gl_Position = vec4(POSITION.xy * vec2(2.0 / 1024.0, -2.04 / 1024.0) + vec2(-1.0, 1.0), 0.0, 1.0);
+}

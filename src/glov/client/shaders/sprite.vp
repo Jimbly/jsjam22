@@ -1,0 +1,23 @@
+// Portions Copyright 2019 Jimb Esser (https://github.com/Jimbly/)
+// Released under MIT License: https://opensource.org/licenses/MIT
+#pragma WebGL2
+precision highp float;
+
+// per-vertex input
+attribute vec2 POSITION;
+attribute vec4 COLOR;
+attribute vec2 TEXCOORD;
+
+// output
+varying lowp vec4 interp_color;
+varying vec2 interp_texcoord;
+
+// global parameters
+uniform vec4 clip_space;
+
+void main()
+{
+  interp_texcoord = TEXCOORD;
+  interp_color = COLOR;
+  gl_Position = vec4(POSITION.xy * clip_space.xy + clip_space.zw, 0.0, 1.0);
+}

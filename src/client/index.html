@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Powered by GLOV.js</title>
+    <meta name="viewport" content="width=device-width,height=device-height,initial-scale=1,user-scalable=no,shrink-to-fit=no,maximum-scale=1.0,minimum-scale=1.0,viewport-fit=cover">
+    <meta name="Description" content="Description goes here" />
+    <meta charset="utf-8"/>
+    <meta property="og:title" content="Powered by GLOV.js">
+    <meta property="og:description" content="Description goes here">
+    <!-- works for FB, maybe Twitter, maybe not: <meta property="og:image" content="img/facebook.png"> -->
+    <meta property="og:image" content="http://www.dashingstrike.com/LudumDare/LDXX/img/facebook.png"> <!-- full path definitely works for twitter, but took a while -->
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta name="twitter:card" content="summary_large_image">
+
+    <link rel="stylesheet" type="text/css" href="main.css">
+    <script>
+      /* eslint-disable */
+      // Platform
+      window.conf_platform = '#{PLATFORM}';
+      // Environment
+      window.conf_env = '#{ENV}';
+    </script>
+    <!-- #if PLATFORM === 'fbinstant' -->
+    <script src="https://connect.facebook.net/en_US/fbinstant.beta.js"></script>
+    <!-- #endif -->
+  </head>
+  <body>
+    <div id="debug_overlay"><div id="debug" class="noglov"></div></div>
+    <canvas id="canvas" moz-opaque="true" tabindex="1">
+      Description goes here.<br/><br/>
+      Sorry, but your browser does not support WebGL or does not have it enabled.  Please check:<br/>
+      <a href="https://get.webgl.org/">get.webgl.org</a> or <a href="http://www.khronos.org/webgl/wiki/Getting_a_WebGL_Implementation" target="_blank">Getting a WebGL Implementation</a>
+    </canvas>
+    <div id="content">
+      <div id="safearea"></div>
+      <div id="nowebgl" class="screenwrap" style="visibility: hidden">
+        <div style="padding: 20px">
+          Description goes here.<br/><br/>
+          Error initializing WebGL.<br/>
+          Try reloading the page.  If the problem persists, perhaps your browser does not support WebGL or does not have it enabled.  Please check:<br/>
+          <a href="https://get.webgl.org/">get.webgl.org</a> or <a href="http://www.khronos.org/webgl/wiki/Getting_a_WebGL_Implementation" target="_blank">Getting a WebGL Implementation</a>
+        </div>
+      </div>
+      <div id="loading" class="screenwrap vflex">
+        <div class="flexcenter" style="flex:1; text-align: center;">
+        </div>
+        <div class="flexcenter" style="text-align: center; width:100%;">
+          <div style="padding-bottom: 20px;">
+<svg version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" style="width:80%; height=auto; max-height: 50vh;" viewBox="185.105 660.093 649.467 347.982">
+<path fill="#B24" d="M676.771,749.573c-73.581-17.35-168.904,30.63-278.952-9.283c121.689,25.056,191.414-14.407,258.189-4.329 C663.313,739.371,670.248,744.108,676.771,749.573z"/>
+<path fill="#B24" d="M761.5,834.5h-13.656l-4.958-8.709H633.595V819.3h86.556h24.725L761.5,834.5z M761.5,834.502h-13.656 l-4.958,8.709H633.595v6.491h86.556h24.725L761.5,834.502z"/>
+<polygon fill="#B24" points="736.557,816.396 683.178,761.781 705.828,806.3 689.427,793.023 694.113,808.643 684.389,816.396"/>
+<path fill="#DDD" d="M633.039,751.008c17.506,28.37,26.88,52.092,18.008,65.388h17.811l9.438-20.947L633.039,751.008z"/>
+<path fill="#DDD" d="M737.5,780.5c-23.945-22.334-46.72-55.511-83.711-68.085c-39.278-13.35-61.186,10.231-164.591,28.288 c90.117,0.236,130.55-25.649,168.479-8.106c16.623,7.688,33.688,22.646,53.822,47.903H737.5z"/>
+<path fill="#DDD" d="M765.5,834.502h54l-76,50h-30c10.167-9.525,19.68-18.962,29.024-30.021l1.586-1.875h2.115L765.5,834.502 M765.5,834.5h54 l-76-50h-30c10.167,9.525,19.68,18.962,29.024,30.021l1.586,1.875h2.115L765.5,834.5"/>
+<path fill="#DDD" d="M596.188,710.233c-29.909-11.095-109.354,35.716-167.053,27.528c-17.959-2.548-41.555-10.445-34.472-33.358 c4.258-13.782,19.427-25.047,40.805-10.022c-19.088-10.477-30.774-1.078-32.722,10.102c-3.725,21.4,26.28,24.709,41.159,24.628 C496.495,728.82,577.274,696.745,596.188,710.233z"/>
+<path fill="#B24" d="M676.771,919.429c-73.581,17.35-168.904-30.63-278.952,9.283c121.689-25.056,191.414,14.407,258.189,4.329 C663.313,929.631,670.248,924.895,676.771,919.429z"/>
+<polygon fill="#B24" points="736.557,852.607 683.178,907.222 705.828,862.702 689.427,875.98 694.113,860.36 684.389,852.607"/>
+<path fill="#DDD" d="M633.039,917.994c17.506-28.37,26.88-52.092,18.008-65.388h17.811l9.438,20.947L633.039,917.994z"/>
+<path fill="#DDD" d="M737.5,888.502c-23.945,22.334-46.72,55.511-83.711,68.085c-39.278,13.35-61.186-10.231-164.591-28.288 c90.117-0.236,130.55,25.649,168.479,8.106c16.623-7.688,33.688-22.646,53.822-47.903H737.5z"/>
+<path fill="#DDD" d="M596.188,958.77c-29.909,11.095-109.354-35.716-167.053-27.528c-17.959,2.548-41.555,10.445-34.472,33.358 c4.258,13.782,19.427,25.047,40.805,10.022c-19.088,10.477-30.774,1.078-32.722-10.102c-3.725-21.4,26.28-24.709,41.159-24.628 C496.495,940.183,577.274,972.257,596.188,958.77z"/>
+<polygon fill="#DDD" points="629.924,762.444 619.954,774.516 589.817,774.516 589.817,804.325 614.779,804.325 614.779,794.998 605.495,794.998 596.361,784.025 628.326,784.025 628.326,804.325 618.28,816.396 586.469,816.396 576.271,804.325 576.271,774.758 586.469,762.444"/>
+<polygon fill="#DDD" points="566.91,816.396 556.648,816.396 524.823,784.925 524.823,816.396 524.026,816.944 511.277,816.944 511.277,762.444 520.942,762.444 553.363,794.633 553.363,762.444 566.91,762.444"/>
+<polygon fill="#DDD" points="501.383,816.473 500.691,816.944 487.837,816.944 487.837,762.444 501.383,762.444"/>
+<polygon fill="#DDD" points="477.942,816.396 464.396,816.396 464.396,794.998 437.606,794.998 437.606,816.487 436.937,816.944 424.061,816.944 424.061,762.444 437.606,762.444 437.606,784.025 464.396,784.025 464.396,762.444 477.942,762.444"/>
+<polygon fill="#DDD" points="416.222,799.844 406.024,816.396 353.968,816.396 363.938,804.325 398.097,804.325 401.293,799.86 398.059,794.998 363.85,794.998 353.968,779.04 364.167,762.444 416.222,762.444 406.176,774.516 372.082,774.516 368.809,779.133 372.082,784.025 406.328,784.025"/>
+<path fill="#DDD" d="M346.129,816.396h-13.547v-15.453h-27.321v15.545l-0.671,0.457h-12.876v-42.429l10.199-12.071h34.018l10.198,12.071 V816.396L346.129,816.396z M332.583,789.055v-14.539h-27.321v14.539H332.583z"/>
+<path fill="#DDD" d="M285.563,801.51l-17.278,39.015h-61.137v-78.296h61.137L285.563,801.51L285.563,801.51z M267.452,801.502l-13.169-29.94 h-29.498v59.631h29.52L267.452,801.502z"/>
+<polygon fill="#DDD" points="621.738,852.697 612.115,864.739 583.026,864.739 583.026,874.224 615.422,874.224 606.606,885.17 583.026,885.17 583.026,894.474 620.196,894.474 610.5,906.516 569.951,906.516 569.951,852.697"/>
+<polygon fill="#DDD" points="561.59,852.697 545.062,872.323 560.182,891.1 560.182,906.516 547.106,906.516 547.106,893.441 537.471,881.477 523.526,897.85 523.526,906.652 522.94,907.062 510.45,907.062 510.45,852.697 523.526,852.697 523.526,879.15 546.078,852.697"/>
+<polygon fill="#DDD" points="500.901,906.591 500.232,907.062 487.824,907.062 487.824,852.697 500.901,852.697"/>
+<path fill="#DDD" d="M478.863,906.516h-13.074v-13.212l-3.942-4.759h-25v17.971l-0.769,0.547h-12.307v-54.365h45.25l9.844,16.601 l-7.493,12.499l7.493,9.304v15.415H478.863z M465.422,870.318l-3.404-5.579h-25.171v11.584h25.072L465.422,870.318z"/>
+<polygon fill="#DDD" points="417.746,852.697 408.124,864.739 395.27,864.739 395.27,906.516 394.499,907.062 382.193,907.062 382.193,864.739 369.338,864.739 359.715,852.697"/>
+<polygon fill="#DDD" points="363.104,883.723 350.953,860.787 304.229,860.787 298.274,850.273 304.269,840.288 350.938,840.288 359.375,828.697 294.527,828.697 283.355,850.16 295.497,873.315 342.168,873.315 348.069,883.79 341.704,894.125 294.96,894.125 286.431,906.32 351.162,906.32"/>
+<polygon fill="#B24" points="391.623,828.697 458.875,828.697 736.479,828.697 744.417,834.5 736.479,840.292 431.229,840.307 391.623,840.307 356.405,840.307 364.839,828.697"/>
+</svg>
+          </div>
+          <h1>Powered by GLOV.js</h1>
+        </div>
+        <div class="flexcenter" style="flex:1; text-align: center;" id="loading_text">
+          Loading...
+        </div>
+      </div>
+      <div id="fullscreen" class="screenwrap">
+        <form id="dynform" autocomplete="off">
+          <input type="submit" style="display: none">
+          <div id="dynamic_text"></div>
+        </form>
+      </div>
+    </div>
+    <!-- disabled-build:js vendor/combined.js -->
+    <!-- endbuild -->
+    <script src="app_deps.bundle.js"></script>
+    <script src="app.bundle.js"></script>
+    <script src="fsdata.js"></script>
+
+  </body>
+</html>
