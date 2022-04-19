@@ -97,6 +97,8 @@ function gameStateCreate() {
     let row = [];
     for (let xx = 0; xx < w; ++xx) {
       row.push({
+        x: xx,
+        y: yy,
         type: TYPE_EMPTY,
       });
     }
@@ -353,8 +355,8 @@ function drawShop(x0, y0, w, h) {
       w: BUTTON_W,
       colors: elem.debug ? colors_debug : undefined,
     })) {
-      let same = game_state.cursor && game_state.cursor.type === elem.type &&
-        game_state.cursor.resource === elem.resource;
+      let same = game_state.cursor && game_state.cursor.cell.type === elem.cell.type &&
+        game_state.cursor.cell.resource === elem.cell.resource;
       refundCursor();
       if (!same) {
         game_state.cursor = clone(elem);
@@ -370,6 +372,16 @@ function drawShop(x0, y0, w, h) {
     }
     if (ui.buttonText({ x: x + w/2, y: y0 + h - ui.button_height, w: w/2, text: 'Load', colors: colors_debug })) {
       game_state = local_storage.getJSON('state');
+      // Fixup old data
+      let { board } = game_state;
+      for (let yy = 0; yy < board.length; ++yy) {
+        let row = board[yy];
+        for (let xx = 0; xx < row.length; ++xx) {
+          let cell = row[xx];
+          cell.x = xx;
+          cell.y = yy;
+        }
+      }
     }
   }
 }
@@ -522,7 +534,7 @@ function drawBoard(x0, y0, w, h) {
     aout = easeOut(a, 2);
   }
 
-  function drawCarried(cell_or_worker, x, y, z) {
+  function drawCarried(cell_or_worker, x, y) {
     let { resource } = cell_or_worker;
     if (!resource) {
       return;
@@ -546,7 +558,7 @@ function drawBoard(x0, y0, w, h) {
       y += lerp(aout, DY[resource_from] * TILE_SIZE, 0);
     }
     sprites.tiles.draw({
-      x, y: y - 8, z: z + 2,
+      x, y: y - 8, z: Z.WORKERS + 1,
       frame: RESOURCE_FRAMES[resource],
     });
   }
@@ -564,7 +576,7 @@ function drawBoard(x0, y0, w, h) {
         x, y, w: TILE_SIZE * size, h: TILE_SIZE * size,
       };
       if (cell.type !== TYPE_SOURCE) {
-        drawCarried(cell, x, y, Z.BOARD);
+        drawCarried(cell, x, y);
       }
       if (game_state.cursor && canPlace(game_state.cursor.cell, xx, yy) && input.click(click_param)) {
         clearCell(xx, yy);
@@ -631,7 +643,7 @@ function drawBoard(x0, y0, w, h) {
       x, y, z: Z.WORKERS,
       frame: 5,
     });
-    drawCarried(worker, x, y, Z.WORKERS);
+    drawCarried(worker, x, y);
   }
 
 
@@ -686,6 +698,12 @@ function drawBoard(x0, y0, w, h) {
   }
 }
 
+function getQuadCell(x, y, quad) {
+  x += QUAD_X[quad % 4];
+  y += QUAD_Y[quad % 4];
+  return game_state.board[y][x];
+}
+
 const BOUNCE_ORDER = [0, 1, 3, 2];
 function tickState() {
   let { board, workers } = game_state;
@@ -699,6 +717,18 @@ function tickState() {
         if (cell.resource) {
           outputResource(cell.resource, xx * TILE_SIZE, yy * TILE_SIZE);
           delete cell.resource;
+        }
+      }
+      if (cell.type === TYPE_CRAFT) {
+        let output = getQuadCell(xx, yy, 3 + cell.rot);
+        let input0 = getQuadCell(xx, yy, 0 + cell.rot);
+        let input1 = getQuadCell(xx, yy, 1 + cell.rot);
+        if (!output.resource && input0.resource && input1.resource) {
+          // do it
+          output.resource = cell.output;
+          output.resource_from =
+          delete input0.resource;
+          delete input1.resource;
         }
       }
     }
