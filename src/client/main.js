@@ -5,18 +5,20 @@ local_storage.setStoragePrefix('jsjam22'); // Before requiring anything else tha
 const camera2d = require('glov/client/camera2d.js');
 const engine = require('glov/client/engine.js');
 const input = require('glov/client/input.js');
-const { floor } = Math;
+const { floor, max, sin, PI } = Math;
 const net = require('glov/client/net.js');
 const pico8 = require('glov/client/pico8.js');
 const { mashString, randCreate } = require('glov/common/rand_alea.js');
 const { createSprite } = require('glov/client/sprites.js');
 const { createSpriteAnimation } = require('glov/client/sprite_animation.js');
 const ui = require('glov/client/ui.js');
+const { lerp, easeInOut } = require('glov/common/util.js');
 const { vec2, vec4 } = require('glov/common/vmath.js');
 
 window.Z = window.Z || {};
 Z.BACKGROUND = 1;
 Z.BOARD = 10;
+Z.WORKERS = 20;
 Z.UI = 100;
 
 // Virtual viewport for our game logic
@@ -26,6 +28,8 @@ const game_height = 384;
 let sprites = {};
 
 const TILE_SIZE = 16;
+
+const TICK_TIME = 1000;
 
 const TYPE_EMPTY = 0;
 const TYPE_DETAIL = 1;
@@ -57,6 +61,13 @@ let game_state;
 const color_ghost = vec4(1, 1, 1, 0.8);
 const color_invalid = vec4(1, 0, 0, 0.5);
 
+const DIR_EAST = 0; // +X
+// const DIR_SOUTH = 1; // +Y
+// const DIR_WEST = 2; // -X
+// const DIR_NORTH = 3; // -Y
+const DX = [1, 0, -1, 0];
+const DY = [0, 1, 0, -1];
+
 function gameStateCreate() {
   rand = randCreate(mashString('test'));
   let board = [];
@@ -84,9 +95,16 @@ function gameStateCreate() {
     board[5+ii][2].type = TYPE_ROAD;
     board[5+ii][5].type = TYPE_ROAD;
   }
+  let workers = [];
+  workers.push({
+    x: 2, y: 4, dir: DIR_EAST,
+  });
   return {
     w, h,
     board,
+    workers,
+    tick_countdown: TICK_TIME,
+    num_ticks: 0,
   };
 }
 
@@ -227,8 +245,6 @@ function typeAt(x, y) {
   return cell && cell.type || TYPE_EMPTY;
 }
 
-const DX = [-1, 1, 0, 0];
-const DY = [0, 0, -1, 1];
 function canPlace(cell, x, y) {
   let size = TYPE_SIZE[cell.type] || 1;
   let { board } = game_state;
@@ -293,7 +309,11 @@ function drawBoard(x0, y0, w, h) {
   let cammap = camera2d.calcMap([], [x0, y0, x0 + w, y0 + h], [0,0,w,h]);
   camera2d.set(cammap[0], cammap[1], cammap[2], cammap[3]);
   // now working in [0,0]...[w,h] space
-  let { board } = game_state;
+
+  let { board, workers } = game_state;
+  let tick_progress = 1 - game_state.tick_countdown / TICK_TIME;
+
+  // draw tiles
   for (let yy = 0; yy < board.length; ++yy) {
     let row = board[yy];
     for (let xx = 0; xx < row.length; ++xx) {
@@ -321,6 +341,25 @@ function drawBoard(x0, y0, w, h) {
       }
     }
   }
+
+  // draw workers
+  for (let ii = 0; ii < workers.length; ++ii) {
+    let worker = workers[ii];
+    let { x, y, lastx, lasty } = worker;
+    if (lastx !== undefined && tick_progress < 0.5) {
+      let a = easeInOut(tick_progress * 2, 2);
+      x = lerp(a, lastx, x);
+      y = lerp(a, lasty, y) + sin(a * PI) * -0.5;
+    }
+    x *= TILE_SIZE;
+    y *= TILE_SIZE;
+    sprites.tiles.draw({
+      x, y, z: Z.WORKERS,
+      frame: 5,
+    });
+  }
+
+
   let mouse_over = input.mouseOver({ x: 0, y: 0, w, h });
   let drew_cursor = false;
   if (mouse_over) {
@@ -356,7 +395,37 @@ function drawBoard(x0, y0, w, h) {
   }
 }
 
+const BOUNCE_ORDER = [0, 1, 3, 2];
+function tickState() {
+  let { workers } = game_state;
+  for (let ii = 0; ii < workers.length; ++ii) {
+    let worker = workers[ii];
+    let { x, y, dir } = worker;
+    for (let jj = 0; jj < BOUNCE_ORDER.length; ++jj) {
+      let dd = (dir + BOUNCE_ORDER[jj]) % 4;
+      let destx = x + DX[dd];
+      let desty = y + DY[dd];
+      if (typeAt(destx, desty) === TYPE_ROAD) {
+        worker.lastx = x;
+        worker.lasty = y;
+        worker.x = destx;
+        worker.y = desty;
+        worker.dir = dd;
+        break;
+      }
+    }
+  }
+}
+
 function statePlay(dt) {
+
+  if (dt >= game_state.tick_countdown) {
+    game_state.tick_countdown = max(TICK_TIME/2, TICK_TIME - (dt - game_state.tick_countdown));
+    game_state.num_ticks++;
+    tickState();
+  } else {
+    game_state.tick_countdown -= dt;
+  }
 
   const SHOP_W = game_width/4;
   drawShop(0, 0, SHOP_W, game_height);
