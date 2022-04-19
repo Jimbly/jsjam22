@@ -15,6 +15,9 @@ Z.BUILD_ERRORS = Z.BUILD_ERRORS || 9900;
 
 function onGBState(state) {
   gbstate = state;
+  if (state && Object.keys(state.tasks).length === 1 && state.tasks.eslint) {
+    gbstate = null;
+  }
 }
 
 function onServerError(err) {
