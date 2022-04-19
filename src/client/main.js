@@ -2,6 +2,7 @@
 const local_storage = require('glov/client/local_storage.js');
 local_storage.setStoragePrefix('jsjam22'); // Before requiring anything else that might load from this
 
+const assert = require('assert');
 const camera2d = require('glov/client/camera2d.js');
 const engine = require('glov/client/engine.js');
 const input = require('glov/client/input.js');
@@ -12,7 +13,8 @@ const { mashString, randCreate } = require('glov/common/rand_alea.js');
 const { createSprite } = require('glov/client/sprites.js');
 const { createSpriteAnimation } = require('glov/client/sprite_animation.js');
 const ui = require('glov/client/ui.js');
-const { clone, lerp, easeInOut } = require('glov/common/util.js');
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const { clone, lerp, easeInOut, easeIn, easeOut } = require('glov/common/util.js');
 const { vec2, vec4 } = require('glov/common/vmath.js');
 
 window.Z = window.Z || {};
@@ -39,8 +41,10 @@ const TYPE_ROAD = 4;
 const TYPE_CRAFT = 5;
 
 const RESOURCE_WOOD = 1;
+const RESOURCE_BERRY = 2;
 const RESOURCE_FRAMES = {
   [RESOURCE_WOOD]: 9,
+  [RESOURCE_BERRY]: 11,
 };
 
 const TYPE_PICKUPABLE = {
@@ -65,6 +69,7 @@ let game_state;
 
 const color_ghost = vec4(1, 1, 1, 0.8);
 const color_invalid = vec4(1, 0, 0, 0.5);
+const colors_debug = ui.makeColorSet([1, 0.5, 1, 1]);
 
 const DIR_EAST = 0; // +X
 // const DIR_SOUTH = 1; // +Y
@@ -114,6 +119,19 @@ function gameStateCreate() {
   };
 }
 
+function gameToJson(state) {
+  let ret = clone(state);
+  let { board } = ret;
+  for (let yy = 0; yy < board.length; ++yy) {
+    let row = board[yy];
+    for (let xx = 0; xx < row.length; ++xx) {
+      let cell = row[xx];
+      delete cell.anim;
+    }
+  }
+  return ret;
+}
+
 function init() {
   sprites.tiles = createSprite({
     name: 'tiles',
@@ -148,7 +166,7 @@ function getCellFrame(cell) {
       if (!cell.anim) {
         cell.anim = createSpriteAnimation({
           idle: {
-            frames: [2,3],
+            frames: [2,10],
             times: [500, 500],
             times_random: [100, 100],
           },
@@ -159,7 +177,16 @@ function getCellFrame(cell) {
       frame = cell.anim.getFrame(engine.frame_dt);
       break;
     case TYPE_SOURCE:
-      frame = 1;
+      switch (cell.resource) {
+        case RESOURCE_WOOD:
+          frame = 1;
+          break;
+        case RESOURCE_BERRY:
+          frame = 3;
+          break;
+        default:
+          assert(0);
+      }
       break;
     case TYPE_SINK:
       frame = 4;
@@ -190,6 +217,13 @@ const SHOP = [
     },
   },
   {
+    name: 'Berry Bush',
+    cell: {
+      type: TYPE_SOURCE,
+      resource: RESOURCE_BERRY,
+    },
+  },
+  {
     name: 'Output',
     cell: {
       type: TYPE_SINK,
@@ -210,12 +244,19 @@ const SHOP = [
     debug: true,
   },
 ];
+
 function refundCursor() {
   if (game_state.cursor) {
     // TODO: refund
     game_state.cursor = null;
   }
 }
+
+// Assume x/y are in board camera space
+function outputResource(resource, x, y) {
+  // TODO
+}
+
 function drawShop(x0, y0, w, h) {
   const PAD = 4;
   const BUTTON_H = 22;
@@ -239,11 +280,22 @@ function drawShop(x0, y0, w, h) {
       x, y, img: sprite, frame,
       h: button_h,
       w: BUTTON_W,
+      colors: elem.debug ? colors_debug : undefined,
     })) {
       refundCursor();
       game_state.cursor = elem;
     }
     y += button_h + PAD;
+  }
+
+
+  if (engine.DEBUG) {
+    if (ui.buttonText({ x, y: y0 + h - ui.button_height, w: w/2, text: 'Save', colors: colors_debug })) {
+      local_storage.setJSON('state', gameToJson(game_state));
+    }
+    if (ui.buttonText({ x: x + w/2, y: y0 + h - ui.button_height, w: w/2, text: 'Load', colors: colors_debug })) {
+      game_state = local_storage.getJSON('state');
+    }
   }
 }
 
@@ -334,42 +386,43 @@ function drawBoard(x0, y0, w, h) {
       let x = xx * TILE_SIZE;
       let y = yy * TILE_SIZE;
       drawCell(cell, x, y);
-      if (input.click({
+      let click_param = {
         x, y, w: TILE_SIZE, h: TILE_SIZE,
-      })) {
-        if (game_state.cursor && canPlace(game_state.cursor.cell, xx, yy)) {
-          clearCell(cell);
-          for (let key in game_state.cursor.cell) {
-            cell[key] = game_state.cursor.cell[key];
-          }
-          if (!input.keyDown(input.KEYS.SHIFT)) {
-            game_state.cursor = null;
-          }
-        } else if (TYPE_PICKUPABLE[cell.type]) {
-          refundCursor();
-          game_state.cursor = {
-            cell: clone(cell),
-          };
-          clearCell(cell);
-          cell.type = TYPE_EMPTY;
+      };
+      if (game_state.cursor && canPlace(game_state.cursor.cell, xx, yy) && input.click(click_param)) {
+        clearCell(cell);
+        for (let key in game_state.cursor.cell) {
+          cell[key] = game_state.cursor.cell[key];
         }
+        if (!input.keyDown(input.KEYS.SHIFT)) {
+          game_state.cursor = null;
+        }
+      } else if (TYPE_PICKUPABLE[cell.type] && input.click(click_param)) {
+        refundCursor();
+        game_state.cursor = {
+          cell: clone(cell),
+        };
+        clearCell(cell);
+        cell.type = TYPE_EMPTY;
       }
     }
   }
 
   // draw workers
   let a = 1;
-  let a2;
+  let ainout;
+  let aout;
   if (tick_progress < 0.5) {
     a = tick_progress * 2;
-    a2 = easeInOut(a, 2);
+    ainout = easeInOut(a, 2);
+    aout = easeOut(a, 2);
   }
   for (let ii = 0; ii < workers.length; ++ii) {
     let worker = workers[ii];
     let { x, y, lastx, lasty, carrying } = worker;
     if (lastx !== undefined && a < 1) {
-      x = lerp(a2, lastx, x);
-      y = lerp(a2, lasty, y) + sin(a2 * PI) * -0.5;
+      x = lerp(ainout, lastx, x);
+      y = lerp(ainout, lasty, y) + sin(ainout * PI) * -0.5;
     }
     x *= TILE_SIZE;
     y *= TILE_SIZE;
@@ -378,15 +431,28 @@ function drawBoard(x0, y0, w, h) {
       frame: 5,
     });
     if (carrying) {
-      let { resource_from } = worker;
-      if (resource_from !== undefined && a < 1) {
-        x += lerp(a2, DX[resource_from] * TILE_SIZE, 0);
-        y += lerp(a2, DY[resource_from] * TILE_SIZE, 0);
+      let cell_param = { x, y, w: TILE_SIZE, h: TILE_SIZE };
+      if (input.click(cell_param)) {
+        outputResource(carrying, x, y);
+        delete worker.carrying;
+      } else {
+        if (input.mouseOver(cell_param)) {
+          sprites.tiles_ui.draw({
+            x, y: y - 8,
+            z: Z.UI,
+            frame: 1,
+          });
+        }
+        let { resource_from } = worker;
+        if (resource_from !== undefined && a < 1) {
+          x += lerp(aout, DX[resource_from] * TILE_SIZE, 0);
+          y += lerp(aout, DY[resource_from] * TILE_SIZE, 0);
+        }
+        sprites.tiles.draw({
+          x, y: y - 8, z: Z.WORKERS + 1,
+          frame: RESOURCE_FRAMES[carrying],
+        });
       }
-      sprites.tiles.draw({
-        x, y: y - 8, z: Z.WORKERS + 1,
-        frame: RESOURCE_FRAMES[carrying],
-      });
     }
   }
 
