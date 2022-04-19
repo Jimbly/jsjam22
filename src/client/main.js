@@ -74,6 +74,7 @@ let rand;
 let game_state;
 
 const color_ghost = vec4(1, 1, 1, 0.8);
+const color_craft_input = vec4(1, 1, 1, 0.4);
 const color_invalid = vec4(1, 0, 0, 0.5);
 const colors_debug = ui.makeColorSet([1, 0.5, 1, 1]);
 
@@ -205,17 +206,17 @@ function getCellFrame(cell, x, y, z) {
       sprites.tiles.draw({
         x, y, z: z + 1,
         frame: RESOURCE_FRAMES[input0],
-        color: color_ghost,
+        color: color_craft_input,
       });
       sprites.tiles.draw({
         x, y: y + TILE_SIZE, z: z + 1,
         frame: RESOURCE_FRAMES[input1],
-        color: color_ghost,
+        color: color_craft_input,
       });
       sprites.tiles.draw({
         x: x + TILE_SIZE, y, z: z + 1,
         frame: RESOURCE_FRAMES[output],
-        color: color_ghost,
+        color: color_craft_input,
       });
     } break;
   }
@@ -556,7 +557,9 @@ function drawBoard(x0, y0, w, h) {
         game_state.cursor = {
           cell: clone(cell),
         };
-        delete game_state.cursor.cell.resource;
+        if (game_state.cursor.cell.type !== TYPE_SOURCE) {
+          delete game_state.cursor.cell.resource;
+        }
         delete game_state.cursor.cell.resource_from;
         clearCell(xx, yy);
         cell.type = TYPE_EMPTY;
