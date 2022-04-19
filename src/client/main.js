@@ -48,9 +48,13 @@ const RESOURCE_FRAMES = {
   [RESOURCE_BERRY]: 11,
 };
 
+const TYPE_ROTATABLE = {
+  [TYPE_CRAFT]: true,
+};
 const TYPE_PICKUPABLE = {
   [TYPE_SOURCE]: true,
   [TYPE_SINK]: true,
+  [TYPE_CRAFT]: true,
 };
 const TYPE_OVERWRITABLE = {
   [TYPE_EMPTY]: true,
@@ -200,12 +204,19 @@ function getCellFrame(cell) {
   return { sprite, frame };
 }
 
+const ROT_OFFS_X = [0, 0, TILE_SIZE*2, TILE_SIZE*2];
+const ROT_OFFS_Y = [0, TILE_SIZE*2, TILE_SIZE*2, 0];
 function drawCell(cell, x, y, z, color) {
   let { sprite, frame } = getCellFrame(cell);
   if (frame !== null) {
+    let rot = cell.rot || 0;
     sprite.draw({
-      x, y, z: z || Z.BOARD, frame,
+      x: x + ROT_OFFS_X[rot],
+      y: y + ROT_OFFS_Y[rot],
+      z: z || Z.BOARD,
+      frame,
       color,
+      rot: rot * -PI/2, // rotates counter-clockwise
     });
   }
 }
@@ -317,8 +328,11 @@ function drawShop(x0, y0, w, h) {
       w: BUTTON_W,
       colors: elem.debug ? colors_debug : undefined,
     })) {
+      let same = game_state.cursor === elem;
       refundCursor();
-      game_state.cursor = elem;
+      if (!same) {
+        game_state.cursor = elem;
+      }
     }
     y += button_h + PAD;
   }
@@ -458,10 +472,13 @@ function drawBoard(x0, y0, w, h) {
       let x = xx * TILE_SIZE;
       let y = yy * TILE_SIZE;
       drawCell(cell, x, y);
+      let size = TYPE_SIZE[cell.type] || 1;
       let click_param = {
-        x, y, w: TILE_SIZE, h: TILE_SIZE,
+        x, y, w: TILE_SIZE * size, h: TILE_SIZE * size,
       };
-      drawCarried(cell, x, y);
+      if (cell.type === TYPE_SINK || cell.type === TYPE_CRAFT) {
+        drawCarried(cell, x, y);
+      }
       if (game_state.cursor && canPlace(game_state.cursor.cell, xx, yy) && input.click(click_param)) {
         clearCell(cell);
         for (let key in game_state.cursor.cell) {
@@ -470,13 +487,21 @@ function drawBoard(x0, y0, w, h) {
         if (!input.keyDown(input.KEYS.SHIFT)) {
           game_state.cursor = null;
         }
-      } else if (TYPE_PICKUPABLE[cell.type] && input.click(click_param)) {
+      } else if (TYPE_PICKUPABLE[cell.type] && input.click({ ...click_param, button: 2 })) {
         refundCursor();
         game_state.cursor = {
           cell: clone(cell),
         };
         clearCell(cell);
         cell.type = TYPE_EMPTY;
+      } else if (TYPE_ROTATABLE[cell.type] && input.click({ ...click_param, button: 0 })) {
+        cell.rot = (cell.rot + 1) % 4;
+        // rotate resources too, if any
+        let t = board[yy][xx].resource;
+        board[yy][xx].resource = board[yy][xx+1].resource;
+        board[yy][xx+1].resource = board[yy+1][xx+1].resource;
+        board[yy+1][xx+1].resource = board[yy+1][xx].resource;
+        board[yy+1][xx].resource = t;
       }
     }
   }
@@ -515,14 +540,16 @@ function drawBoard(x0, y0, w, h) {
         } else {
           drawCell(game_state.cursor.cell, x * TILE_SIZE, y * TILE_SIZE, Z.UI, color_invalid);
         }
-      } else if (cell && TYPE_PICKUPABLE[cell.type]) {
-        sprites.tiles_ui.draw({
-          x: x * TILE_SIZE,
-          y: y * TILE_SIZE,
-          z: Z.UI,
-          frame: 0,
-        });
       }
+      // No: only on right click currently
+      // else if (TYPE_PICKUPABLE[cell.type]) {
+      //   sprites.tiles_ui.draw({
+      //     x: x * TILE_SIZE,
+      //     y: y * TILE_SIZE,
+      //     z: Z.UI,
+      //     frame: 0,
+      //   });
+      // }
     }
   }
 
