@@ -162,7 +162,8 @@ function init() {
   game_state = gameStateCreate();
 }
 
-function getCellFrame(cell) {
+// Also draws details not included in base sprite
+function getCellFrame(cell, x, y, z) {
   let sprite = TYPE_SIZE[cell.type] === 2 ? sprites.tiles_2x : sprites.tiles;
   let frame = null;
   switch (cell.type) { // eslint-disable-line default-case
@@ -198,9 +199,25 @@ function getCellFrame(cell) {
     case TYPE_SINK:
       frame = 4;
       break;
-    case TYPE_CRAFT:
-      frame = 4; // note: 2x tile space
-      break;
+    case TYPE_CRAFT: {
+      frame = 4; // note: in namespace of double-sized tiles
+      let { input0, input1, output } = cell;
+      sprites.tiles.draw({
+        x, y, z: z + 1,
+        frame: RESOURCE_FRAMES[input0],
+        color: color_ghost,
+      });
+      sprites.tiles.draw({
+        x, y: y + TILE_SIZE, z: z + 1,
+        frame: RESOURCE_FRAMES[input1],
+        color: color_ghost,
+      });
+      sprites.tiles.draw({
+        x: x + TILE_SIZE, y, z: z + 1,
+        frame: RESOURCE_FRAMES[output],
+        color: color_ghost,
+      });
+    } break;
   }
   return { sprite, frame };
 }
@@ -208,7 +225,7 @@ function getCellFrame(cell) {
 const ROT_OFFS_X = [0, 0, TILE_SIZE*2, TILE_SIZE*2];
 const ROT_OFFS_Y = [0, TILE_SIZE*2, TILE_SIZE*2, 0];
 function drawCell(cell, x, y, z, color) {
-  let { sprite, frame } = getCellFrame(cell);
+  let { sprite, frame } = getCellFrame(cell, x, y, z);
   if (frame !== null) {
     let rot = cell.rot || 0;
     sprite.draw({
@@ -247,6 +264,9 @@ const SHOP = [
     name: 'Craft',
     cell: {
       type: TYPE_CRAFT,
+      input0: RESOURCE_WOOD,
+      input1: RESOURCE_BERRY,
+      output: RESOURCE_WOOD,
     },
   },
 
@@ -320,7 +340,7 @@ function drawShop(x0, y0, w, h) {
     if (elem.debug && !engine.DEBUG) {
       continue;
     }
-    let { sprite, frame } = getCellFrame(elem.cell);
+    let { sprite, frame } = getCellFrame(elem.cell, x + BUTTON_W/2 - TILE_SIZE, y + 3, Z.UI);
     let scale = TYPE_SIZE[elem.cell.type] || 1;
     let button_h = BUTTON_H + (scale - 1) * 16;
     if (ui.button({
@@ -354,22 +374,29 @@ function typeAt(x, y) {
   return cell && cell.type || TYPE_EMPTY;
 }
 
-function craftingInputAt(x, y) {
+function crafterAcceptsResource(cell, resource) {
+  if (!cell || cell.type !== TYPE_CRAFT) {
+    return false;
+  }
+  return true;
+}
+
+function craftingInputAt(x, y, resource) {
   let { board } = game_state;
   let cell = board[y][x];
-  if (cell && cell.type === TYPE_CRAFT && (cell.rot === 3 || cell.rot === 0)) {
+  if (crafterAcceptsResource(cell, resource) && (cell.rot === 3 || cell.rot === 0)) {
     return true;
   }
   cell = board[y][x-1];
-  if (cell && cell.type === TYPE_CRAFT && (cell.rot === 2 || cell.rot === 3)) {
+  if (crafterAcceptsResource(cell, resource) && (cell.rot === 2 || cell.rot === 3)) {
     return true;
   }
-  cell = board[y-1][x-1];
-  if (cell && cell.type === TYPE_CRAFT && (cell.rot === 1 || cell.rot === 2)) {
+  cell = board[y-1]?.[x-1];
+  if (crafterAcceptsResource(cell, resource) && (cell.rot === 1 || cell.rot === 2)) {
     return true;
   }
-  cell = board[y-1][x];
-  if (cell && cell.type === TYPE_CRAFT && (cell.rot === 0 || cell.rot === 1)) {
+  cell = board[y-1]?.[x];
+  if (crafterAcceptsResource(cell, resource) && (cell.rot === 0 || cell.rot === 1)) {
     return true;
   }
   return false;
@@ -669,7 +696,7 @@ function tickState() {
             continue outer;
           }
         }
-        if (craftingInputAt(nx, ny)) {
+        if (craftingInputAt(nx, ny, worker.resource)) {
           let target_cell = board[ny][nx];
           if (!target_cell.resource) {
             target_cell.resource = worker.resource;
