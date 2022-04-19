@@ -1013,31 +1013,32 @@ function tickState() {
     }
   }
 
-  outer:
   for (let ii = 0; ii < workers.length; ++ii) {
     let worker = workers[ii];
     let { x, y, dir } = worker;
     delete worker.lastx;
     delete worker.resource_from;
+    let did_anything = false;
     if (!worker.resource) {
       // check for pickup
-      for (let jj = 0; jj < DX.length; ++jj) {
+      for (let jj = 0; !did_anything && jj < DX.length; ++jj) {
         let nx = x + DX[jj];
         let ny = y + DY[jj];
         if (typeAt(nx, ny) === TYPE_SOURCE) {
           worker.resource = board[ny][nx].resource;
           worker.resource_from = jj;
-          continue outer;
+          did_anything = true;
         } else if (craftingOutputAt(nx, ny)) {
           worker.resource = craftingOutputAt(nx, ny);
           delete board[ny][nx].resource;
           worker.resource_from = jj;
+          did_anything = true;
         }
       }
     }
     if (worker.resource) {
       // check for drop off
-      for (let jj = 0; jj < DX.length; ++jj) {
+      for (let jj = 0; !did_anything && jj < DX.length; ++jj) {
         let nx = x + DX[jj];
         let ny = y + DY[jj];
         if (typeAt(nx, ny) === TYPE_SINK) {
@@ -1046,7 +1047,8 @@ function tickState() {
             target_cell.resource = worker.resource;
             delete worker.resource;
             target_cell.resource_from = (jj + 2) % 4;
-            continue outer;
+            did_anything = true;
+            break;
           }
         }
         if (craftingInputAt(nx, ny, worker.resource)) {
@@ -1055,7 +1057,8 @@ function tickState() {
             target_cell.resource = worker.resource;
             delete worker.resource;
             target_cell.resource_from = (jj + 2) % 4;
-            continue outer;
+            did_anything = true;
+            break;
           }
         }
       }
@@ -1070,7 +1073,7 @@ function tickState() {
         x = worker.x = destx;
         y = worker.y = desty;
         worker.dir = dd;
-        continue outer;
+        break;
       }
     }
   }
