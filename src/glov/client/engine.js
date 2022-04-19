@@ -818,7 +818,7 @@ function tick(timestamp) {
     app_state(dt);
   }
 
-  glov_particles.tick(dt); // *after* app_tick, so newly added/killed particles can be queued into the draw list
+  // glov_particles.tick(dt); // *after* app_tick, so newly added/killed particles can be queued into the draw list
 
   if (had_3d_this_frame) {
     if (had_render_scale_3d_this_frame) {

@@ -9,6 +9,8 @@ const input = require('glov/client/input.js');
 const { KEYS } = input;
 const { floor, max, sin, PI } = Math;
 const net = require('glov/client/net.js');
+const particle_data = require('./particle_data.js');
+const { preloadParticleData } = require('glov/client/particles.js');
 const pico8 = require('glov/client/pico8.js');
 const { mashString, randCreate } = require('glov/common/rand_alea.js');
 const { createSprite } = require('glov/client/sprites.js');
@@ -23,6 +25,7 @@ Z.BACKGROUND = 1;
 Z.BOARD = 10;
 Z.WORKERS = 20;
 Z.UI = 100;
+Z.PARTICLES = 150;
 Z.FLOATERS = 200;
 
 // Virtual viewport for our game logic
@@ -30,6 +33,7 @@ const game_width = 640;
 const game_height = 384;
 
 let sprites = {};
+let particles;
 
 const TILE_SIZE = 16;
 
@@ -164,6 +168,8 @@ function init() {
     hs: [TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE],
     size: vec2(TILE_SIZE, TILE_SIZE),
   });
+
+  preloadParticleData(particle_data);
 
   game_state = gameStateCreate();
 }
@@ -678,6 +684,8 @@ function drawBoard(x0, y0, w, h) {
 
   updateFloaters();
 
+  particles.tick(engine.frame_dt);
+
   camera2d.pop();
 
   if (game_state.cursor && !drew_cursor) {
@@ -729,6 +737,7 @@ function tickState() {
           output.resource_from =
           delete input0.resource;
           delete input1.resource;
+          particles.createSystem(particle_data.defs.explosion, [(xx + 1)*TILE_SIZE, (yy + 1)*TILE_SIZE, Z.PARTICLES]);
         }
       }
     }
@@ -852,6 +861,7 @@ export function main() {
   ui.scaleSizes(22 / 32);
   ui.setFontHeight(16);
 
+  particles = engine.glov_particles;
   init();
 
   engine.setState(statePlay);
