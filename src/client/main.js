@@ -84,7 +84,7 @@ const color_invalid = vec4(1, 0, 0, 0.5);
 const colors_debug = ui.makeColorSet([1, 0.5, 1, 1]);
 
 const DIR_EAST = 0; // +X
-// const DIR_SOUTH = 1; // +Y
+const DIR_SOUTH = 1; // +Y
 // const DIR_WEST = 2; // -X
 // const DIR_NORTH = 3; // -Y
 const DX = [1, 0, -1, 0];
@@ -93,10 +93,25 @@ const DY = [0, 1, 0, -1];
 const QUAD_X = [0, 0, 1, 1];
 const QUAD_Y = [0, 1, 1, 0];
 
-function gameStateCreate() {
-  rand = randCreate(mashString('test'));
+function addLoop(state, x, y, w, h) {
+  let { board, workers } = state;
+  for (let ii = 0; ii < w; ++ii) {
+    board[y][x+ii].type = TYPE_ROAD;
+    board[y + h - 1][x+ii].type = TYPE_ROAD;
+  }
+  for (let ii = 0; ii < h; ++ii) {
+    board[y+ii][x].type = TYPE_ROAD;
+    board[y+ii][x+w - 1].type = TYPE_ROAD;
+  }
+  workers.push({
+    x, y, dir: rand.range(2) ? DIR_EAST : DIR_SOUTH,
+  });
+}
+
+function gameStateCreate(seed) {
+  rand = randCreate(mashString(seed));
   let board = [];
-  let w = 24;
+  let w = 30;
   let h = 24;
   for (let yy = 0; yy < h; ++yy) {
     let row = [];
@@ -115,19 +130,8 @@ function gameStateCreate() {
     let cell = board[y][x];
     cell.type = TYPE_DETAIL;
   }
-  // 4x6 road at 2,4
-  for (let ii = 0; ii < 4; ++ii) {
-    board[4][2+ii].type = TYPE_ROAD;
-    board[9][2+ii].type = TYPE_ROAD;
-    board[5+ii][2].type = TYPE_ROAD;
-    board[5+ii][5].type = TYPE_ROAD;
-  }
   let workers = [];
-  workers.push({
-    x: 2, y: 4, dir: DIR_EAST,
-    // resource: RESOURCE_WOOD,
-  });
-  return {
+  let state = {
     w, h,
     board,
     workers,
@@ -135,6 +139,14 @@ function gameStateCreate() {
     num_ticks: 0,
     resources: {},
   };
+  // loop road in center
+  let loop_w = 4 + rand.range(3);
+  let loop_h = 4 + rand.range(3);
+  if (loop_w > 4 && loop_h > 4) {
+    loop_w = 4;
+  }
+  addLoop(state, floor((w - loop_w) / 2), floor((h - loop_h) / 2), loop_w, loop_h);
+  return state;
 }
 
 function gameToJson(state) {
@@ -147,6 +159,7 @@ function gameToJson(state) {
       delete cell.anim;
     }
   }
+  ret.seed = rand.exportState();
   return ret;
 }
 
@@ -172,7 +185,7 @@ function init() {
 
   preloadParticleData(particle_data);
 
-  game_state = gameStateCreate();
+  game_state = gameStateCreate('test');
 }
 
 // Also draws details not included in base sprite
@@ -384,11 +397,17 @@ function drawShop(x0, y0, w, h) {
 
 
   if (engine.DEBUG) {
-    if (ui.buttonText({ x, y: y0 + h - ui.button_height, w: w/2, text: 'Save', colors: colors_debug })) {
+    if (ui.buttonText({ x, y: y0 + h - ui.button_height, w: w/3, text: 'New', colors: colors_debug })) {
+      game_state = gameStateCreate(String(Math.random()));
+    }
+    if (ui.buttonText({ x: x + w/3, y: y0 + h - ui.button_height, w: w/3, text: 'Save', colors: colors_debug })) {
       local_storage.setJSON('state', gameToJson(game_state));
     }
-    if (ui.buttonText({ x: x + w/2, y: y0 + h - ui.button_height, w: w/2, text: 'Load', colors: colors_debug })) {
+    if (ui.buttonText({ x: x + w*2/3, y: y0 + h - ui.button_height, w: w/3, text: 'Load', colors: colors_debug })) {
       game_state = local_storage.getJSON('state');
+      if (game_state.seed) {
+        rand.importState(game_state.seed);
+      }
       // Fixup old data
       let { board } = game_state;
       for (let yy = 0; yy < board.length; ++yy) {
