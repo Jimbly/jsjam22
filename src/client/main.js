@@ -378,29 +378,44 @@ function typeAt(x, y) {
   return cell && cell.type || TYPE_EMPTY;
 }
 
-function crafterAcceptsResource(cell, resource) {
+function resourceMatches(cell, key, resource) {
   if (!cell || cell.type !== TYPE_CRAFT) {
     return false;
   }
-  return true;
+  if (cell[key] === resource) {
+    return true;
+  }
+  return false;
 }
 
 function craftingInputAt(x, y, resource) {
   let { board } = game_state;
   let cell = board[y][x];
-  if (crafterAcceptsResource(cell, resource) && (cell.rot === 3 || cell.rot === 0)) {
+  if (resourceMatches(cell, 'input0', resource) && cell.rot === 0) {
+    return true;
+  }
+  if (resourceMatches(cell, 'input1', resource) && cell.rot === 3) {
     return true;
   }
   cell = board[y][x-1];
-  if (crafterAcceptsResource(cell, resource) && (cell.rot === 2 || cell.rot === 3)) {
+  if (resourceMatches(cell, 'input0', resource) && cell.rot === 3) {
+    return true;
+  }
+  if (resourceMatches(cell, 'input1', resource) && cell.rot === 2) {
     return true;
   }
   cell = board[y-1]?.[x-1];
-  if (crafterAcceptsResource(cell, resource) && (cell.rot === 1 || cell.rot === 2)) {
+  if (resourceMatches(cell, 'input0', resource) && cell.rot === 2) {
+    return true;
+  }
+  if (resourceMatches(cell, 'input1', resource) && cell.rot === 1) {
     return true;
   }
   cell = board[y-1]?.[x];
-  if (crafterAcceptsResource(cell, resource) && (cell.rot === 0 || cell.rot === 1)) {
+  if (resourceMatches(cell, 'input0', resource) && cell.rot === 1) {
+    return true;
+  }
+  if (resourceMatches(cell, 'input1', resource) && cell.rot === 0) {
     return true;
   }
   return false;
