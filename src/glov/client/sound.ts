@@ -102,7 +102,7 @@ settings.register({
 
 settings.register({
   volume_music: {
-    default_value: 1,
+    default_value: 0.3,
     type: cmd_parse.TYPE_FLOAT,
     range: [0,1],
   },
@@ -110,7 +110,7 @@ settings.register({
 
 settings.register({
   volume_sound: {
-    default_value: 1,
+    default_value: 0.5,
     type: cmd_parse.TYPE_FLOAT,
     range: [0,1],
   },

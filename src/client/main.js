@@ -16,6 +16,7 @@ const pico8 = require('glov/client/pico8.js');
 const { mashString, randCreate } = require('glov/common/rand_alea.js');
 const { scrollAreaCreate } = require('glov/client/scroll_area.js');
 const settings = require('glov/client/settings.js');
+const { soundPlayMusic } = require('glov/client/sound.js');
 const { createSprite } = require('glov/client/sprites.js');
 const { createSpriteAnimation } = require('glov/client/sprite_animation.js');
 const transition = require('glov/client/transition.js');
@@ -1412,6 +1413,8 @@ function drawBoard(x0, y0, w, h) {
             cell[key] = game_state.cursor.cell[key];
           }
           cell.rot = cell.rot || 0;
+          cell.x = xx;
+          cell.y = yy;
         }
         if (!input.keyDown(KEYS.SHIFT)) {
           game_state.cursor = null;
@@ -1851,6 +1854,11 @@ function stateMenu() {
   x += button_h + pad;
 }
 
+function pumpMusic() {
+  soundPlayMusic('bg');
+  setTimeout(pumpMusic, 90*1000);
+}
+
 export function main() {
   if (engine.DEBUG) {
     // Enable auto-reload, etc
@@ -1884,15 +1892,15 @@ export function main() {
     },
     ui_sounds: {
       // user actions
-      place: 'button_click',
-      pickup: 'button_click',
-      rotate: 'button_click',
+      place: ['down1', 'down2', 'down3'],
+      pickup: ['upchord1', 'upchord2', 'upchord3'],
+      rotate: ['upchord1', 'upchord2', 'upchord3'],
       stun: 'button_click',
-      delete: 'rollover',
+      delete: 'button_click',
       // worker actions
-      //sell: 'rollover',
-      craft: 'rollover',
-      progress: 'msg_in',
+      sell: ['up1', 'up2', 'up3'],
+      craft: ['up1', 'up2', 'up3'],
+      progress: 'fanfare',
     },
   })) {
     return;
@@ -1907,5 +1915,6 @@ export function main() {
   particles = engine.glov_particles;
   init();
 
+  pumpMusic();
   engine.setState(engine.DEBUG ? statePlay : stateMenu);
 }
