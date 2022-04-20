@@ -20,7 +20,7 @@ const { createSpriteAnimation } = require('glov/client/sprite_animation.js');
 const ui = require('glov/client/ui.js');
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const { clamp, clone, lerp, easeInOut, easeIn, easeOut, ridx } = require('glov/common/util.js');
-const { vec2, vec4 } = require('glov/common/vmath.js');
+const { vec2, vec4, v4set } = require('glov/common/vmath.js');
 
 window.Z = window.Z || {};
 Z.BACKGROUND = 1;
@@ -752,12 +752,15 @@ function payCost(shop_elem, scale) {
   let { resources } = game_state;
   let { cost } = shop_elem;
   for (let key in cost) {
-    resources[key] += scale * cost[key];
+    resources[key] = (resources[key] || 0) + scale * cost[key];
   }
 }
 
 function sameShopItem(a, b) {
-  return a.cell.type === b.cell.type && a.cell.resource === b.cell.resource;
+  return a.cell.type === b.cell.type && (
+    a.cell.resource === b.cell.resource ||
+    !a.cell.resource && !b.cell.resource
+  );
 }
 
 function refundCursor() {
@@ -1165,6 +1168,18 @@ function drawBoard(x0, y0, w, h) {
     ui.playUISound('button_click');
     fast_forward = !fast_forward;
   }
+  if (ui.button({
+    x: x0 + w - FF_BUTTON_SIZE*2 - 4,
+    y: y0,
+    w: FF_BUTTON_SIZE, h: FF_BUTTON_SIZE,
+    img: sprites.tiles_ui,
+    frame: 11,
+    tooltip: 'Save and Exit to Menu',
+    no_bg: true,
+  })) {
+    // todo
+  }
+
   // Show time
   font.draw({
     x: x0 + w - 4,
@@ -1588,6 +1603,8 @@ export function main() {
 
   ui.scaleSizes(22 / 32);
   ui.setFontHeight(font.h);
+  ui.setPanelPixelScale(1);
+  v4set(ui.color_panel, 1,1,1,1);
   ({ font, title_font } = engine);
 
   particles = engine.glov_particles;
