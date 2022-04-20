@@ -19,6 +19,7 @@ const settings = require('glov/client/settings.js');
 const { createSprite } = require('glov/client/sprites.js');
 const { createSpriteAnimation } = require('glov/client/sprite_animation.js');
 const transition = require('glov/client/transition.js');
+const { createTransitioner } = require('./transitioner.js');
 const ui = require('glov/client/ui.js');
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const { clamp, clone, lerp, easeInOut, easeIn, easeOut, ridx } = require('glov/common/util.js');
@@ -1584,38 +1585,85 @@ function statePlay(dt) {
   drawBoard(SHOP_W, 0, game_width - SHOP_W, game_height);
 }
 
+
+let transitioner = createTransitioner({
+  tracks: {
+    menu_buttons: {
+      in: {
+        start: 0,
+        end: 1000,
+      },
+      out: {},
+    },
+    title: {
+      in: {
+        start: 0,
+        end: 1000,
+      },
+      out: {},
+    },
+    attribution: {
+      in: {
+        start: 500,
+        end: 1100,
+      },
+      out: {},
+    },
+    cow_walk: {
+      in: {
+        start: 1000,
+        end: 2000,
+        ease: 'out',
+      },
+      out: {},
+    },
+  },
+  interactable_at: 100,
+});
+
 let cow_rot = 0;
 function stateMenu() {
+  transitioner.update();
   v4copy(engine.border_clear_color, pico8.colors[11]);
   gl.clearColor(...pico8.colors[11]);
 
-  sprites.title_text.draw({ x: 0, y: 0, w: game_width, h: game_height, z: Z.BACKGROUND });
+  let color = transitioner.getFadeColor('title');
+  if (color) {
+    sprites.title_text.draw({ x: 0, y: 0, w: game_width, h: game_height, z: Z.BACKGROUND, color });
+  }
 
   const CREDITS_SIZE = 16;
   let y = game_height - CREDITS_SIZE - 4;
-  title_font.draw({
-    x: 0, w: game_width,
-    y,
-    align: font.ALIGN.HCENTER,
-    text: 'By Chris Benjaminsen and Jimb Esser',
-    size: CREDITS_SIZE,
+  let attr_style = transitioner.getFadeFont('attribution', style(null, {
     color: pico8.font_colors[0],
-  });
+  }));
+  if (attr_style) {
+    title_font.draw({
+      x: 0, w: game_width,
+      y,
+      align: font.ALIGN.HCENTER,
+      text: 'By Chris Benjaminsen and Jimb Esser',
+      size: CREDITS_SIZE,
+      style: attr_style,
+    });
+  }
 
   const COW_X = 550; // center
   const COW_Y = 298;
   const COW_SCALE = 10;
   const COW_R = COW_SCALE * (TILE_SIZE/2 - 1);
   let target_rot = 0;
-  if (input.mouseOver({ x: COW_X - COW_R, y: COW_Y - COW_R, w: COW_R*2, h: COW_R*2})) {
+  let walk = transitioner.getTrack('cow_walk');
+  let x = COW_X + (1 - walk) * 200;
+  if (input.mouseOver({ x: x - COW_R, y: COW_Y - COW_R, w: COW_R*2, h: COW_R*2})) {
     target_rot = sin(engine.frame_timestamp * 0.005) * 0.2;
   }
   cow_rot = lerp(0.1, cow_rot, target_rot);
   sprites.tiles_centered.draw({
     frame: RESOURCE_FRAMES[RESOURCE_GOLDENCOW],
-    x: 550,
-    y: 298,
-    w: 10, h: 10,
+    x,
+    y: COW_Y,
+    w: COW_SCALE, h: COW_SCALE,
     rot: cow_rot,
   });
 
@@ -1625,12 +1673,14 @@ function stateMenu() {
   let has_save = hasSaveGame();
   let num_buttons = has_save ? 2 : 1;
   y = floor(game_height * 2/3);
-  let x = (game_width - button_w * num_buttons + (num_buttons - 1) * pad) / 2;
+  x = (game_width - button_w * num_buttons + (num_buttons - 1) * pad) / 2;
+  color = transitioner.getFadeButtonColor('menu_buttons');
   if (has_save) {
     if (ui.button({
       x, y,
       w: button_w, h: button_h,
-      text: 'Resume Game'
+      color,
+      text: 'Resume Game',
     })) {
       loadGame();
       engine.setState(statePlay);
@@ -1641,7 +1691,8 @@ function stateMenu() {
   if (ui.button({
     x, y,
     w: button_w, h: button_h,
-    text: has_save ? 'New Game' : 'Start Game'
+    color,
+    text: has_save ? 'New Game' : 'Start Game',
   })) {
     if (has_save) {
       game_state = gameStateCreate(String(Math.random()));
@@ -1661,6 +1712,7 @@ function stateMenu() {
     frame: settings.get('sound') ? 6 : 7,
     x, y,
     w: button_h, h: button_h,
+    color,
     no_bg: true,
   })) {
     settings.set('sound', 1 - settings.get('sound'));
