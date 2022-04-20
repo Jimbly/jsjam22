@@ -1589,7 +1589,7 @@ function getQuadCell(x, y, quad) {
 }
 
 function tickState() {
-  let { board, workers } = game_state;
+  let { board, workers, num_ticks } = game_state;
 
   for (let yy = 0; yy < board.length; ++yy) {
     let row = board[yy];
@@ -1615,6 +1615,7 @@ function tickState() {
           delete input1.resource;
           particles.createSystem(particle_data.defs.explosion, [(xx + 1)*TILE_SIZE, (yy + 1)*TILE_SIZE, Z.PARTICLES]);
           ui.playUISound('craft');
+          cell.did_output_on = num_ticks;
         }
       }
     }
@@ -1639,7 +1640,7 @@ function tickState() {
           worker.resource = board[ny][nx].resource;
           worker.resource_from = jj;
           did_anything = true;
-        } else if (craftingOutputAt(nx, ny)) {
+        } else if (craftingOutputAt(nx, ny) && board[ny][nx].did_output_on !== num_ticks) {
           worker.resource = craftingOutputAt(nx, ny);
           delete board[ny][nx].resource;
           worker.resource_from = jj;
