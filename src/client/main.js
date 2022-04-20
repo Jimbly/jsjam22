@@ -508,6 +508,7 @@ function gameStateAddProgress(state) {
     // must add a new road
     gameStateAddRoad(state);
   }
+  ui.playUISound('progress');
 }
 
 function gameToJson(state) {
@@ -1196,6 +1197,7 @@ function drawBoard(x0, y0, w, h) {
     let cell_param = { x, y, w: TILE_SIZE, h: TILE_SIZE };
     if (input.click(cell_param)) {
       // outputResource(resource, x, y, target_offset);
+      ui.playUISound('delete');
       delete cell_or_worker.resource;
       return;
     }
@@ -1245,6 +1247,7 @@ function drawBoard(x0, y0, w, h) {
         drawCarried(cell, x, y, CARRY_OFFSET_WORKER, CARRY_OFFSET_SOURCE_SINK);
       }
       if (game_state.cursor && canPlace(game_state.cursor.cell, xx, yy) && input.click(click_param)) {
+        ui.playUISound('place');
         if (game_state.cursor.cell.type === TYPE_DEBUG_WORKER) {
           game_state.workers.push({
             x: xx, y: yy,
@@ -1262,6 +1265,7 @@ function drawBoard(x0, y0, w, h) {
           game_state.cursor = null;
         }
       } else if (TYPE_PICKUPABLE[cell.type] && input.click({ ...click_param, button: 2 })) {
+        ui.playUISound('pickup');
         refundCursor();
         game_state.cursor = {
           cell: clone(cell),
@@ -1289,6 +1293,7 @@ function drawBoard(x0, y0, w, h) {
           x, y, w: TILE_SIZE * size, h: TILE_SIZE * size,
           button: 0, // left button only, right will sell structure
         })) {
+          ui.playUISound('rotate');
           cell.rot = (cell.rot + 1) % 4;
           // sell all resources
           clearCell(xx, yy, true);
@@ -1342,6 +1347,7 @@ function drawBoard(x0, y0, w, h) {
       x, y, w: TILE_SIZE, h: TILE_SIZE,
     };
     if (!worker.stunned && input.click(click_param)) {
+      ui.playUISound('stun');
       worker.stunned = 2;
     }
     if (worker.stunned) {
@@ -1424,6 +1430,7 @@ function tickState() {
       if (cell.type === TYPE_SINK) {
         if (cell.resource) {
           outputResource(cell.resource, xx * TILE_SIZE, yy * TILE_SIZE, CARRY_OFFSET_SOURCE_SINK);
+          ui.playUISound('sell');
           delete cell.resource;
         }
       }
@@ -1438,6 +1445,7 @@ function tickState() {
           delete input0.resource;
           delete input1.resource;
           particles.createSystem(particle_data.defs.explosion, [(xx + 1)*TILE_SIZE, (yy + 1)*TILE_SIZE, Z.PARTICLES]);
+          ui.playUISound('craft');
         }
       }
     }
@@ -1561,6 +1569,18 @@ export function main() {
       button: ['ui/button', [4,14,4], [22]],
       button_down: ['ui/button_down', [4,14,4], [22]],
       button_disabled: ['ui/button_disabled', [4,14,4], [22]],
+    },
+    ui_sounds: {
+      // user actions
+      place: 'button_click',
+      pickup: 'button_click',
+      rotate: 'button_click',
+      stun: 'button_click',
+      delete: 'rollover',
+      // worker actions
+      //sell: 'rollover',
+      craft: 'rollover',
+      progress: 'msg_in',
     },
   })) {
     return;
