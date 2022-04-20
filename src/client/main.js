@@ -60,6 +60,22 @@ const RESOURCE_FRAMES = {
   [RESOURCE_METAL]: 27,
 };
 
+const ANIMDATA_DETAIL = {
+  idle: {
+    frames: [2,10],
+    times: [500, 500],
+    times_random: [100, 100],
+  },
+};
+
+const ANIMDATA_WORKER = {
+  idle: {
+    frames: [5,6],
+    times: [1000, 200],
+    times_random: [5000, 100],
+  },
+};
+
 const TYPE_ROTATABLE = {
   [TYPE_CRAFT]: true,
 };
@@ -435,13 +451,16 @@ function gameStateAddProgress(state) {
 
 function gameToJson(state) {
   let ret = clone(state);
-  let { board } = ret;
+  let { board, workers } = ret;
   for (let yy = 0; yy < board.length; ++yy) {
     let row = board[yy];
     for (let xx = 0; xx < row.length; ++xx) {
       let cell = row[xx];
       delete cell.anim;
     }
+  }
+  for (let ii = 0; ii < workers.length; ++ii) {
+    delete workers[ii].anim;
   }
   ret.seed = rand.exportState();
   return ret;
@@ -451,13 +470,13 @@ function init() {
   sprites.tiles = createSprite({
     name: 'tiles',
     ws: [TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE],
-    hs: [TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE],
+    hs: [TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE],
     size: vec2(TILE_SIZE, TILE_SIZE),
   });
   sprites.tiles_2x = createSprite({
     name: 'tiles',
     ws: [TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE],
-    hs: [TILE_SIZE, TILE_SIZE],
+    hs: [TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE],
     size: vec2(TILE_SIZE * 2, TILE_SIZE * 2),
   });
   sprites.tiles_ui = createSprite({
@@ -492,13 +511,7 @@ function getCellFrame(cell, x, y, z) {
       break;
     case TYPE_DETAIL:
       if (!cell.anim) {
-        cell.anim = createSpriteAnimation({
-          idle: {
-            frames: [2,10],
-            times: [500, 500],
-            times_random: [100, 100],
-          },
-        });
+        cell.anim = createSpriteAnimation(ANIMDATA_DETAIL);
         cell.anim.setState('idle');
         cell.anim.update(rand.range(1000));
       }
@@ -1024,9 +1037,13 @@ function drawBoard(x0, y0, w, h) {
     }
     x *= TILE_SIZE;
     y *= TILE_SIZE;
+    if (!worker.anim) {
+      worker.anim = createSpriteAnimation(ANIMDATA_WORKER);
+      worker.anim.setState('idle');
+    }
     sprites.tiles.draw({
       x, y, z: Z.WORKERS,
-      frame: 5,
+      frame: worker.anim.getFrame(engine.frame_dt),
     });
     drawCarried(worker, x, y, CARRY_OFFSET_SOURCE_SINK, CARRY_OFFSET_WORKER);
     let click_param = {
