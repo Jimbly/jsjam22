@@ -40,7 +40,7 @@ const game_height = 384;
 let font;
 let title_font;
 
-let auto_load = true;
+let auto_load = false;
 let fast_forward = false;
 
 let sprites = {};
@@ -50,7 +50,7 @@ const TILE_SIZE = 16;
 const CARRY_OFFSET_SOURCE_SINK = 1;
 const CARRY_OFFSET_WORKER = 8;
 
-const INITIAL_GAME_SEED = 'test';
+const INITIAL_GAME_SEED = 'test5';
 
 const TICK_TIME = 1000;
 
