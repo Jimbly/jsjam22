@@ -1340,24 +1340,26 @@ function drawBoard(x0, y0, w, h) {
     aout = easeOut(a, 2);
   }
 
-  function drawCarried(cell_or_worker, x, y, source_offset, target_offset) {
+  function drawCarried(cell_or_worker, x, y, source_offset, target_offset, no_delete) {
     let { resource } = cell_or_worker;
     if (!resource) {
       return;
     }
-    let cell_param = { x, y, w: TILE_SIZE, h: TILE_SIZE };
-    if (input.click({ ...cell_param, button: 0 })) {
-      // outputResource(resource, x, y, target_offset);
-      ui.playUISound('delete');
-      delete cell_or_worker.resource;
-      return;
-    }
-    if (input.mouseOver(cell_param)) {
-      sprites.tiles_ui.draw({
-        x, y: y - target_offset,
-        z: Z.UI,
-        frame: 0,
-      });
+    if (!no_delete) {
+      let cell_param = { x, y, w: TILE_SIZE, h: TILE_SIZE };
+      if (input.click({ ...cell_param, button: 0 })) {
+        // outputResource(resource, x, y, target_offset);
+        ui.playUISound('delete');
+        delete cell_or_worker.resource;
+        return;
+      }
+      if (input.mouseOver(cell_param)) {
+        sprites.tiles_ui.draw({
+          x, y: y - target_offset,
+          z: Z.UI,
+          frame: 0,
+        });
+      }
     }
     let { resource_from } = cell_or_worker;
     let offs = target_offset;
@@ -1395,7 +1397,7 @@ function drawBoard(x0, y0, w, h) {
         x, y, w: TILE_SIZE * size, h: TILE_SIZE * size,
       };
       if (cell.type !== TYPE_SOURCE) {
-        drawCarried(cell, x, y, CARRY_OFFSET_WORKER, CARRY_OFFSET_SOURCE_SINK);
+        drawCarried(cell, x, y, CARRY_OFFSET_WORKER, CARRY_OFFSET_SOURCE_SINK, cell.type === TYPE_SINK);
       }
       if (game_state.cursor && canPlace(game_state.cursor.cell, xx, yy) && input.click(click_param)) {
         ui.playUISound('place');
