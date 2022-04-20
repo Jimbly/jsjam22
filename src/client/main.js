@@ -61,14 +61,25 @@ const TYPE_ROAD = 4;
 const TYPE_CRAFT = 5;
 const TYPE_DEBUG_WORKER = 6;
 
+// TODO: order these by the order they're unlocked for high-score reasons?
 const RESOURCE_WOOD = 1;
 const RESOURCE_BERRY = 2;
 const RESOURCE_METAL = 3;
+const RESOURCE_GOLD = 4;
+const RESOURCE_LOVE = 5;
+const RESOURCE_WATER = 6;
+const RESOURCE_FIRE = 7;
+const RESOURCE_COW = 8;
 const RESOURCE_GOLDENCOW = 100;
 const RESOURCE_FRAMES = {
   [RESOURCE_WOOD]: 9,
   [RESOURCE_BERRY]: 11,
+  [RESOURCE_GOLD]: 12,
+  [RESOURCE_LOVE]: 13,
+  [RESOURCE_WATER]: 19,
+  [RESOURCE_FIRE]: 20,
   [RESOURCE_METAL]: 27,
+  [RESOURCE_COW]: 28,
   [RESOURCE_GOLDENCOW]: 29,
 };
 
@@ -657,6 +668,9 @@ function getCellFrame(cell, x, y, z) {
           break;
         case RESOURCE_BERRY:
           frame = 3;
+          break;
+        case RESOURCE_WATER:
+          frame = 18;
           break;
         case RESOURCE_METAL:
           frame = 26;
@@ -1776,5 +1790,5 @@ export function main() {
   particles = engine.glov_particles;
   init();
 
-  engine.setState(stateMenu); // donotcheckin
+  engine.setState(engine.DEBUG ? statePlay : stateMenu);
 }
