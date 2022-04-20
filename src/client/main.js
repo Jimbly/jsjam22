@@ -60,13 +60,22 @@ const RESOURCE_FRAMES = {
   [RESOURCE_METAL]: 27,
 };
 
-const ANIMDATA_DETAIL = {
-  idle: {
-    frames: [2,10],
-    times: [500, 500],
-    times_random: [100, 100],
+const ANIMDATA_DETAIL = [
+  {
+    idle: {
+      frames: [2,10],
+      times: [500, 500],
+      times_random: [100, 100],
+    },
   },
-};
+  {
+    idle: {
+      frames: [44,45],
+      times: [500, 500],
+      times_random: [400, 400],
+    },
+  },
+];
 
 const ANIMDATA_WORKER = {
   idle: {
@@ -285,6 +294,7 @@ function gameStateCreate(seed) {
     let y = rand.range(h);
     let cell = board[y][x];
     cell.type = TYPE_DETAIL;
+    cell.variation = rand.range(2);
   }
   let workers = [];
   let state = {
@@ -549,6 +559,11 @@ function init() {
   game_state = gameStateCreate('test');
 }
 
+function typeAt(x, y) {
+  let cell = game_state.board[y]?.[x];
+  return cell && cell.type || TYPE_EMPTY;
+}
+
 // Also draws details not included in base sprite
 function getCellFrame(cell, x, y, z) {
   let sprite = TYPE_SIZE[cell.type] === 2 ? sprites.tiles_2x : sprites.tiles;
@@ -558,11 +573,38 @@ function getCellFrame(cell, x, y, z) {
       frame = 5;
       break;
     case TYPE_ROAD:
-      frame = 0;
+      frame = 32;
+      if (cell.x) {
+        let up = typeAt(cell.x, cell.y - 1) === TYPE_ROAD;
+        let down = typeAt(cell.x, cell.y + 1) === TYPE_ROAD;
+        let left = typeAt(cell.x - 1, cell.y) === TYPE_ROAD;
+        let right = typeAt(cell.x + 1, cell.y) === TYPE_ROAD;
+        if (left && down) {
+          frame = 34;
+        } else if (up && right) {
+          frame = 41;
+        } else if (right && down) {
+          frame = 33;
+        } else if (up && left) {
+          frame = 42;
+        } else if (down && up) {
+          frame = 40;
+        } else if (left && right) {
+          frame = 32;
+        } else if (down) {
+          frame = 35;
+        } else if (up) {
+          frame = 43;
+        } else if (right) {
+          frame = 36;
+        } else if (left) {
+          frame = 37;
+        }
+      }
       break;
     case TYPE_DETAIL:
       if (!cell.anim) {
-        cell.anim = createSpriteAnimation(ANIMDATA_DETAIL);
+        cell.anim = createSpriteAnimation(ANIMDATA_DETAIL[cell.variation]);
         cell.anim.setState('idle');
         cell.anim.update(rand.range(1000));
       }
@@ -789,11 +831,6 @@ function drawShop(x0, y0, w, h) {
       }
     }
   }
-}
-
-function typeAt(x, y) {
-  let cell = game_state.board[y]?.[x];
-  return cell && cell.type || TYPE_EMPTY;
 }
 
 function resourceMatches(cell, key, resource) {
