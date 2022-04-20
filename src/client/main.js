@@ -1852,6 +1852,17 @@ function stateMenu() {
     settings.set('sound', 1 - settings.get('sound'));
   }
   x += button_h + pad;
+  if (ui.button({
+    img: sprites.tiles_ui,
+    frame: settings.get('music') ? 14 : 15,
+    x, y,
+    w: button_h, h: button_h,
+    color,
+    no_bg: true,
+  })) {
+    settings.set('music', 1 - settings.get('music'));
+  }
+  x += button_h + pad;
 }
 
 function pumpMusic() {
@@ -1892,6 +1903,7 @@ export function main() {
     },
     ui_sounds: {
       // user actions
+      button_click: ['upchord1', 'upchord2', 'upchord3'],
       place: ['down1', 'down2', 'down3'],
       pickup: ['upchord1', 'upchord2', 'upchord3'],
       rotate: ['upchord1', 'upchord2', 'upchord3'],
