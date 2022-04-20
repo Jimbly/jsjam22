@@ -61,22 +61,21 @@ const TYPE_ROAD = 4;
 const TYPE_CRAFT = 5;
 const TYPE_DEBUG_WORKER = 6;
 
-// TODO: order these by the order they're unlocked for high-score reasons?
 const RESOURCE_WOOD = 1;
-const RESOURCE_BERRY = 2;
-const RESOURCE_METAL = 3;
-const RESOURCE_GOLD = 4;
-const RESOURCE_LOVE = 5;
-const RESOURCE_WATER = 6;
-const RESOURCE_FIRE = 7;
-const RESOURCE_COW = 8;
-const RESOURCE_STEAM = 9;
-const RESOURCE_GEARS = 10;
-const RESOURCE_GOLDPAINT = 11;
+// const RESOURCE_BERRY = 99;
+const RESOURCE_METAL = 2;
+const RESOURCE_FIRE = 3;
+const RESOURCE_WATER = 4;
+const RESOURCE_STEAM = 5;
+const RESOURCE_GOLD = 6;
+const RESOURCE_LOVE = 7;
+const RESOURCE_GOLDPAINT = 8;
+const RESOURCE_GEARS = 9;
+const RESOURCE_COW = 10;
 const RESOURCE_GOLDENCOW = 100;
 const RESOURCE_FRAMES = {
   [RESOURCE_WOOD]: 9,
-  [RESOURCE_BERRY]: 11,
+  // [RESOURCE_BERRY]: 11,
   [RESOURCE_GOLD]: 12,
   [RESOURCE_LOVE]: 13,
   [RESOURCE_WATER]: 19,
@@ -301,7 +300,7 @@ function gameStateAddFirstLoop(state) {
   board[output_pos[1]][output_pos[0]].type = TYPE_SINK;
 }
 
-const GAME_STATE_VER = 4;
+const GAME_STATE_VER = 5;
 function gameStateCreate(seed) {
   rand = randCreate(mashString(seed));
   let board = [];
@@ -672,9 +671,9 @@ function getCellFrame(cell, x, y, z) {
         case RESOURCE_WOOD:
           frame = 1;
           break;
-        case RESOURCE_BERRY:
-          frame = 3;
-          break;
+        // case RESOURCE_BERRY:
+        //   frame = 3;
+        //   break;
         case RESOURCE_WATER:
           frame = 18;
           break;
