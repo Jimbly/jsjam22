@@ -5,6 +5,7 @@ local_storage.setStoragePrefix('jsjam22'); // Before requiring anything else tha
 const assert = require('assert');
 const camera2d = require('glov/client/camera2d.js');
 const engine = require('glov/client/engine.js');
+const { style } = require('glov/client/font.js');
 const input = require('glov/client/input.js');
 const { KEYS } = input;
 const { floor, max, sin, PI } = Math;
@@ -31,6 +32,7 @@ Z.FLOATERS = 200;
 // Virtual viewport for our game logic
 const game_width = 640;
 const game_height = 384;
+let font;
 
 let auto_load = true;
 
@@ -272,7 +274,7 @@ function gameStateAddFirstLoop(state) {
   board[output_pos[1]][output_pos[0]].type = TYPE_SINK;
 }
 
-const GAME_STATE_VER = 2;
+const GAME_STATE_VER = 3;
 function gameStateCreate(seed) {
   rand = randCreate(mashString(seed));
   let board = [];
@@ -303,7 +305,9 @@ function gameStateCreate(seed) {
     workers,
     tick_countdown: TICK_TIME,
     num_ticks: 0,
-    resources: {},
+    resources: {
+      [RESOURCE_WOOD]: 1,
+    },
     ever_output: {},
     ver: GAME_STATE_VER,
   };
@@ -675,12 +679,18 @@ const SHOP = [
       type: TYPE_SOURCE,
       resource: RESOURCE_WOOD,
     },
+    cost: {
+      [RESOURCE_BERRY]: 3,
+    },
   },
   {
     name: 'Berry Bush',
     cell: {
       type: TYPE_SOURCE,
       resource: RESOURCE_BERRY,
+    },
+    cost: {
+      [RESOURCE_WOOD]: 1,
     },
   },
   {
@@ -689,20 +699,29 @@ const SHOP = [
       type: TYPE_SOURCE,
       resource: RESOURCE_METAL,
     },
+    cost: {
+      [RESOURCE_WOOD]: 2,
+    },
   },
   {
     name: 'Output',
     cell: {
       type: TYPE_SINK,
     },
+    cost: {
+      [RESOURCE_BERRY]: 15,
+    },
   },
   {
-    name: 'Craft',
+    name: 'Craft metal',
     cell: {
       type: TYPE_CRAFT,
       input0: RESOURCE_WOOD,
       input1: RESOURCE_BERRY,
       output: RESOURCE_METAL,
+    },
+    cost: {
+      [RESOURCE_METAL]: 1,
     },
   },
 
@@ -711,6 +730,7 @@ const SHOP = [
     cell: {
       type: TYPE_ROAD,
     },
+    cost: {},
     debug: true,
   },
   {
@@ -718,13 +738,33 @@ const SHOP = [
     cell: {
       type: TYPE_DEBUG_WORKER,
     },
+    cost: {},
     debug: true,
   },
 ];
 
+function payCost(shop_elem, scale) {
+  scale = scale || -1;
+  let { resources } = game_state;
+  let { cost } = shop_elem;
+  for (let key in cost) {
+    resources[key] += scale * cost[key];
+  }
+}
+
+function sameShopItem(a, b) {
+  return a.cell.type === b.cell.type && a.cell.resource === b.cell.resource;
+}
+
 function refundCursor() {
   if (game_state.cursor) {
-    // TODO: refund
+    for (let ii = 0; ii < SHOP.length; ++ii) {
+      let elem = SHOP[ii];
+      if (sameShopItem(game_state.cursor, elem)) {
+        payCost(elem, 1);
+        break;
+      }
+    }
     game_state.cursor = null;
   }
 }
@@ -771,10 +811,17 @@ function outputResource(resource, x0, y0, offs) {
   }
 }
 
+const style_cost = style(null, {
+  color: pico8.font_colors[3],
+});
+const style_cost_disabled = style(style_cost, {
+  color: pico8.font_colors[2],
+});
+
 function drawShop(x0, y0, w, h) {
   const PAD = 4;
   const BUTTON_H = 22;
-  const BUTTON_W = 48;
+  const BUTTON_W = 74;
   let x = x0;
   let y = y0;
   ui.drawRect2({ x, y, w, h, color: pico8.colors[15], z: Z.UI - 1 });
@@ -782,25 +829,96 @@ function drawShop(x0, y0, w, h) {
   y += PAD;
   w -= PAD*2;
   h -= PAD*2;
+  let { resources } = game_state;
   for (let ii = 0; ii < SHOP.length; ++ii) {
     let elem = SHOP[ii];
     if (elem.debug && !engine.DEBUG) {
       continue;
     }
-    let { sprite, frame } = getCellFrame(elem.cell, x + BUTTON_W/2 - TILE_SIZE, y + 3, Z.UI);
-    let scale = TYPE_SIZE[elem.cell.type] || 1;
-    let button_h = BUTTON_H + (scale - 1) * 16;
+    let { cost } = elem;
+    let { type } = elem.cell;
+    let button_h = BUTTON_H;
+    let text;
+    let sprite;
+    let frame;
+    if (type === TYPE_CRAFT) {
+      let { input0, input1, output } = elem.cell;
+      text = ' ';
+      let xx = x + 3;
+      let yy = y + 3;
+      sprites.tiles.draw({
+        x: xx, y: yy, z: Z.UI + 1,
+        frame: RESOURCE_FRAMES[input0],
+      });
+      xx += TILE_SIZE - 4;
+      sprites.tiles_ui.draw({
+        x: xx,
+        y: yy,
+        z: Z.UI,
+        frame: 4,
+      });
+      xx += TILE_SIZE - 4;
+      sprites.tiles.draw({
+        x: xx, y: yy, z: Z.UI + 1,
+        frame: RESOURCE_FRAMES[input1],
+      });
+      xx += TILE_SIZE - 3;
+      sprites.tiles_ui.draw({
+        x: xx,
+        y: yy,
+        z: Z.UI,
+        frame: 5,
+      });
+      xx += TILE_SIZE - 2;
+      sprites.tiles.draw({
+        x: xx, y: yy, z: Z.UI + 1,
+        frame: RESOURCE_FRAMES[output],
+      });
+      xx += TILE_SIZE;
+    } else {
+      ({ sprite, frame } = getCellFrame(elem.cell, x + BUTTON_W/2 - TILE_SIZE, y + 3, Z.UI));
+    }
+    let disabled = false;
+    let xx = x + BUTTON_W + 4;
+    const COST_W = 42;
+    for (let key in cost) {
+      let have = resources[key] || 0;
+      let need = cost[key];
+      if (need > have) {
+        disabled = true;
+      }
+      font.draw({
+        style: disabled ? style_cost_disabled : style_cost,
+        x: xx,
+        y,
+        w: COST_W,
+        align: font.ALIGN.HRIGHT | font.ALIGN.HFIT,
+        text: `${have}/${need}`,
+      });
+      xx += COST_W + 2;
+      sprites.tiles.draw({
+        x: xx,
+        y,
+        frame: RESOURCE_FRAMES[key],
+      });
+      xx += TILE_SIZE;
+    }
+    let same = game_state.cursor && sameShopItem(game_state.cursor, elem);
+    if (same) {
+      disabled = false;
+    }
     if (ui.button({
       x, y, img: sprite, frame,
+      text,
       h: button_h,
       w: BUTTON_W,
       colors: elem.debug ? colors_debug : undefined,
+      disabled,
     })) {
-      let same = game_state.cursor && game_state.cursor.cell.type === elem.cell.type &&
-        game_state.cursor.cell.resource === elem.cell.resource;
       refundCursor();
       if (!same) {
         game_state.cursor = clone(elem);
+        payCost(elem);
       }
     }
     y += button_h + PAD;
@@ -810,6 +928,13 @@ function drawShop(x0, y0, w, h) {
   if (engine.DEBUG) {
     if (ui.buttonText({ x, y: y0 + h - ui.button_height * 2 - PAD, w: w/3, text: '+Prog', colors: colors_debug })) {
       gameStateAddProgress(game_state);
+    }
+    if (ui.buttonText({ x: x + w/3, y: y0 + h - ui.button_height * 2 - PAD, w: w/3, text: '+Res',
+      colors: colors_debug })
+    ) {
+      for (let key in RESOURCE_FRAMES) {
+        game_state.resources[key] = (game_state.resources[key] || 0) + 25;
+      }
     }
     if (ui.buttonText({ x, y: y0 + h - ui.button_height, w: w/3, text: 'New', colors: colors_debug })) {
       game_state = gameStateCreate(String(Math.random()));
@@ -1366,7 +1491,6 @@ export function main() {
   const font_info_04b03x1 = require('./img/font/04b03_8x1.json');
   const font_info_palanquin32 = require('./img/font/palanquin32.json');
   let pixely = 'strict';
-  let font;
   if (pixely === 'strict') {
     font = { info: font_info_04b03x1, texture: 'font/04b03_8x1' };
   } else if (pixely && pixely !== 'off') {
