@@ -973,6 +973,22 @@ function updateFloaters() {
   }
 }
 
+let high_score_from_victory = false;
+
+function youWin() {
+  ui.modalDialog({
+    text: 'You win!\n\nCongratulations, you have successfully demonstrated your ingenuity and' +
+      ' resourcefulness by creating a wonderful artifact that shall be respectfully' +
+      ' admired by all.',
+    buttons: {
+      Yay: null,
+    },
+  });
+  high_score_from_victory = true;
+  // eslint-disable-next-line no-use-before-define
+  engine.setState(stateHighScores);
+}
+
 // Assume x/y are in board camera space
 function outputResource(resource, x0, y0, offs) {
   game_state.resources[resource] = (game_state.resources[resource] || 0) + 1;
@@ -988,6 +1004,9 @@ function outputResource(resource, x0, y0, offs) {
     score_system.setScore(0,
       { ticks: game_state.num_ticks, tech: resource }
     );
+    if (resource === RESOURCE_GOLDENCOW) {
+      youWin();
+    }
   }
 }
 
@@ -1848,7 +1867,7 @@ function stateHighScores() {
   let width = 280;
   let x = (game_width - width) / 2;
   let y = 0;
-  let z = Z.MODAL + 10;
+  let z = Z.UI + 10;
   let size = 8;
   let pad = size;
   title_font.drawSizedAligned(null, x, y, z, size * 2, font.ALIGN.HCENTERFIT, width, 0, 'HIGH SCORES');
@@ -1959,8 +1978,24 @@ function stateHighScores() {
 
   // ui.menuUp();
 
+  let button_x = (game_width - MENU_BUTTON_W) / 2;
+  if (high_score_from_victory) {
+    button_x -= MENU_BUTTON_W / 2 + 4;
+    if (ui.button({
+      x: button_x,
+      y: game_height - MENU_BUTTON_H - 4,
+      w: MENU_BUTTON_W, h: MENU_BUTTON_H,
+      text: 'Continue Playing',
+    })) {
+      transition.queue(Z.TRANSITION_FINAL, transition.pixelate(500));
+      // eslint-disable-next-line no-use-before-define
+      engine.setState(statePlay);
+    }
+    button_x += MENU_BUTTON_W + 4;
+  }
+
   if (ui.button({
-    x: (game_width - MENU_BUTTON_W) / 2,
+    x: button_x,
     y: game_height - MENU_BUTTON_H - 4,
     w: MENU_BUTTON_W, h: MENU_BUTTON_H,
     text: 'Main Menu',
@@ -2061,6 +2096,7 @@ function stateMenu() {
     text: 'High Scores',
   })) {
     score_system.updateHighScores();
+    high_score_from_victory = false;
     engine.setState(stateHighScores);
     transition.queue(Z.TRANSITION_FINAL, transition.fade(500));
   }
