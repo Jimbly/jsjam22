@@ -14,6 +14,7 @@ const particle_data = require('./particle_data.js');
 const { preloadParticleData } = require('glov/client/particles.js');
 const pico8 = require('glov/client/pico8.js');
 const { mashString, randCreate } = require('glov/common/rand_alea.js');
+const { scrollAreaCreate } = require('glov/client/scroll_area.js');
 const { createSprite } = require('glov/client/sprites.js');
 const { createSpriteAnimation } = require('glov/client/sprite_animation.js');
 const ui = require('glov/client/ui.js');
@@ -818,6 +819,10 @@ const style_cost_disabled = style(style_cost, {
   color: pico8.font_colors[2],
 });
 
+let scroll_area = scrollAreaCreate({
+  background_color: null,
+  auto_hide: true,
+});
 function drawShop(x0, y0, w, h) {
   const PAD = 4;
   const BUTTON_H = 22;
@@ -825,13 +830,19 @@ function drawShop(x0, y0, w, h) {
   let x = x0;
   let y = y0;
   ui.drawRect2({ x, y, w, h, color: pico8.colors[15], z: Z.UI - 1 });
+  scroll_area.begin({
+    x, y, w,
+    h: h - (engine.DEBUG ? ui.button_height * 3 : 0),
+    z: Z.UI,
+  });
+  x = y = 0;
   x += PAD;
   y += PAD;
   w -= PAD*2;
   h -= PAD*2;
   let { resources } = game_state;
   for (let ii = 0; ii < SHOP.length; ++ii) {
-    let elem = SHOP[ii];
+    let elem = SHOP[ii % SHOP.length];
     if (elem.debug && !engine.DEBUG) {
       continue;
     }
@@ -924,6 +935,7 @@ function drawShop(x0, y0, w, h) {
     y += button_h + PAD;
   }
 
+  scroll_area.end(y);
 
   if (engine.DEBUG) {
     if (ui.buttonText({ x, y: y0 + h - ui.button_height * 2 - PAD, w: w/3, text: '+Prog', colors: colors_debug })) {
