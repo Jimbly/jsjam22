@@ -15,6 +15,7 @@ const { preloadParticleData } = require('glov/client/particles.js');
 const pico8 = require('glov/client/pico8.js');
 const { mashString, randCreate } = require('glov/common/rand_alea.js');
 const { scrollAreaCreate } = require('glov/client/scroll_area.js');
+const settings = require('glov/client/settings.js');
 const { createSprite } = require('glov/client/sprites.js');
 const { createSpriteAnimation } = require('glov/client/sprite_animation.js');
 const ui = require('glov/client/ui.js');
@@ -46,6 +47,8 @@ const TILE_SIZE = 16;
 const CARRY_OFFSET_SOURCE_SINK = 1;
 const CARRY_OFFSET_WORKER = 8;
 
+const INITIAL_GAME_SEED = 'test';
+
 const TICK_TIME = 1000;
 
 const TYPE_EMPTY = 0;
@@ -59,10 +62,12 @@ const TYPE_DEBUG_WORKER = 6;
 const RESOURCE_WOOD = 1;
 const RESOURCE_BERRY = 2;
 const RESOURCE_METAL = 3;
+const RESOURCE_GOLDENCOW = 100;
 const RESOURCE_FRAMES = {
   [RESOURCE_WOOD]: 9,
   [RESOURCE_BERRY]: 11,
   [RESOURCE_METAL]: 27,
+  [RESOURCE_GOLDENCOW]: 29,
 };
 
 const ANIMDATA_DETAIL = [
@@ -410,6 +415,42 @@ function gameStateAddRoad(state) {
 
 const BOUNCE_ORDER = [0, 1, 3, 2];
 
+function gameToJson(state) {
+  let ret = clone(state);
+  let { board, workers } = ret;
+  for (let yy = 0; yy < board.length; ++yy) {
+    let row = board[yy];
+    for (let xx = 0; xx < row.length; ++xx) {
+      let cell = row[xx];
+      delete cell.anim;
+    }
+  }
+  for (let ii = 0; ii < workers.length; ++ii) {
+    delete workers[ii].anim;
+  }
+  ret.seed = rand.exportState();
+  return ret;
+}
+
+function saveGame() {
+  local_storage.setJSON('state', gameToJson(game_state));
+}
+
+function hasSaveGame() {
+  let state = local_storage.getJSON('state');
+  return state && state.ver === GAME_STATE_VER;
+}
+
+function loadGame() {
+  let state = local_storage.getJSON('state');
+  if (state && state.ver === GAME_STATE_VER) {
+    game_state = state;
+    if (game_state.seed) {
+      rand.importState(game_state.seed);
+    }
+  }
+}
+
 function gameStateAddProgress(state) {
   let seen = {}; // index -> road
   let roads = [];
@@ -509,23 +550,9 @@ function gameStateAddProgress(state) {
     gameStateAddRoad(state);
   }
   ui.playUISound('progress');
-}
-
-function gameToJson(state) {
-  let ret = clone(state);
-  let { board, workers } = ret;
-  for (let yy = 0; yy < board.length; ++yy) {
-    let row = board[yy];
-    for (let xx = 0; xx < row.length; ++xx) {
-      let cell = row[xx];
-      delete cell.anim;
-    }
+  if (!engine.DEBUG) {
+    saveGame();
   }
-  for (let ii = 0; ii < workers.length; ++ii) {
-    delete workers[ii].anim;
-  }
-  ret.seed = rand.exportState();
-  return ret;
 }
 
 function init() {
@@ -561,10 +588,13 @@ function init() {
     size: vec2(TILE_SIZE, TILE_SIZE),
     origin: vec2(0.5, 0.5),
   });
+  sprites.title_text = createSprite({
+    name: 'title_text',
+  });
 
   preloadParticleData(particle_data);
 
-  game_state = gameStateCreate('test');
+  game_state = gameStateCreate(INITIAL_GAME_SEED);
 }
 
 function typeAt(x, y) {
@@ -959,7 +989,7 @@ function drawShop(x0, y0, w, h) {
       game_state = gameStateCreate(String(Math.random()));
     }
     if (ui.buttonText({ x: x + w/3, y: y0 + h - ui.button_height, w: w/3, text: 'Save', colors: colors_debug })) {
-      local_storage.setJSON('state', gameToJson(game_state));
+      saveGame();
     }
   }
   if (auto_load ||
@@ -967,13 +997,7 @@ function drawShop(x0, y0, w, h) {
     ui.buttonText({ x: x + w*2/3, y: y0 + h - ui.button_height, w: w/3, text: 'Load', colors: colors_debug })
   ) {
     auto_load = false;
-    let state = local_storage.getJSON('state');
-    if (state && state.ver === GAME_STATE_VER) {
-      game_state = state;
-      if (game_state.seed) {
-        rand.importState(game_state.seed);
-      }
-    }
+    loadGame();
   }
 }
 
@@ -1177,7 +1201,9 @@ function drawBoard(x0, y0, w, h) {
     tooltip: 'Save and Exit to Menu',
     no_bg: true,
   })) {
-    // todo
+    saveGame();
+    // eslint-disable-next-line no-use-before-define
+    engine.setState(stateMenu);
   }
 
   // Show time
@@ -1537,6 +1563,7 @@ function tickState() {
 }
 
 function statePlay(dt) {
+  gl.clearColor(...pico8.colors[0]);
 
   if (fast_forward) {
     dt *= 5;
@@ -1552,6 +1579,87 @@ function statePlay(dt) {
   const SHOP_W = game_width/4;
   drawShop(0, 0, SHOP_W, game_height);
   drawBoard(SHOP_W, 0, game_width - SHOP_W, game_height);
+}
+
+let cow_rot = 0;
+function stateMenu() {
+  gl.clearColor(...pico8.colors[11]);
+
+  sprites.title_text.draw({ x: 0, y: 0, w: game_width, h: game_height, z: Z.BACKGROUND });
+
+  const CREDITS_SIZE = 16;
+  let y = game_height - CREDITS_SIZE - 4;
+  title_font.draw({
+    x: 0, w: game_width,
+    y,
+    align: font.ALIGN.HCENTER,
+    text: 'By Chris Benjaminsen and Jimb Esser',
+    size: CREDITS_SIZE,
+    color: pico8.font_colors[0],
+  });
+
+  const COW_X = 550; // center
+  const COW_Y = 298;
+  const COW_SCALE = 10;
+  const COW_R = COW_SCALE * (TILE_SIZE/2 - 1);
+  let target_rot = 0;
+  if (input.mouseOver({ x: COW_X - COW_R, y: COW_Y - COW_R, w: COW_R*2, h: COW_R*2})) {
+    target_rot = sin(engine.frame_timestamp * 0.005) * 0.2;
+  }
+  cow_rot = lerp(0.1, cow_rot, target_rot);
+  sprites.tiles_centered.draw({
+    frame: RESOURCE_FRAMES[RESOURCE_GOLDENCOW],
+    x: 550,
+    y: 298,
+    w: 10, h: 10,
+    rot: cow_rot,
+  });
+
+  let button_w = 96;
+  let button_h = 22;
+  let pad = 4;
+  let has_save = hasSaveGame();
+  let num_buttons = has_save ? 2 : 1;
+  y = floor(game_height * 2/3);
+  let x = (game_width - button_w * num_buttons + (num_buttons - 1) * pad) / 2;
+  if (has_save) {
+    if (ui.button({
+      x, y,
+      w: button_w, h: button_h,
+      text: 'Resume Game'
+    })) {
+      loadGame();
+      engine.setState(statePlay);
+    }
+    x += button_w + pad;
+  }
+  if (ui.button({
+    x, y,
+    w: button_w, h: button_h,
+    text: has_save ? 'New Game' : 'Start Game'
+  })) {
+    if (has_save) {
+      game_state = gameStateCreate(String(Math.random()));
+    } else {
+      game_state = gameStateCreate(INITIAL_GAME_SEED);
+    }
+    engine.setState(statePlay);
+  }
+  x += button_w + pad;
+
+  // toggle buttons
+  x = pad;
+  y = game_height - pad - button_h;
+  if (ui.button({
+    img: sprites.tiles_ui,
+    frame: settings.get('sound') ? 6 : 7,
+    x, y,
+    w: button_h, h: button_h,
+    no_bg: true,
+  })) {
+    settings.set('sound', 1 - settings.get('sound'));
+  }
+  x += button_h + pad;
 }
 
 export function main() {
@@ -1605,10 +1713,10 @@ export function main() {
   ui.setFontHeight(font.h);
   ui.setPanelPixelScale(1);
   v4set(ui.color_panel, 1,1,1,1);
-  ({ font, title_font } = engine);
+  ({ font, title_font } = ui);
 
   particles = engine.glov_particles;
   init();
 
-  engine.setState(statePlay);
+  engine.setState(stateMenu); // donotcheckin
 }
