@@ -8,7 +8,7 @@ const engine = require('glov/client/engine.js');
 const { style } = require('glov/client/font.js');
 const input = require('glov/client/input.js');
 const { KEYS } = input;
-const { floor, max, sin, PI } = Math;
+const { floor, max, sin, random, PI } = Math;
 const net = require('glov/client/net.js');
 const particle_data = require('./particle_data.js');
 const { preloadParticleData } = require('glov/client/particles.js');
@@ -156,8 +156,9 @@ const QUAD_X = [0, 0, 1, 1];
 const QUAD_Y = [0, 1, 1, 0];
 
 function patternLoop() {
-  let w = 4 + rand.range(3);
-  let h = 4 + rand.range(3);
+  let wide = rand.range(2);
+  let w = wide ? 6 : 4;
+  let h = wide ? 4 : 6;
   if (w > 4 && h > 4) {
     if (rand.range(2)) {
       w = 4;
@@ -318,7 +319,7 @@ function gameStateCreate(seed) {
     }
     board.push(row);
   }
-  for (let ii = 0; ii < 20; ++ii) {
+  for (let ii = 0; ii < 30; ++ii) {
     let x = rand.range(w);
     let y = rand.range(h);
     let cell = board[y][x];
@@ -399,7 +400,7 @@ function patternFits(state, pattern, pat_x, pat_y) {
       }
     }
   }
-  if (neighbor_matches < 2) {
+  if (neighbor_matches < 3) {
     return false;
   }
   return true;
@@ -407,7 +408,7 @@ function patternFits(state, pattern, pat_x, pat_y) {
 
 function gameStateAddRoad(state) {
   let { w, h } = state;
-  for (let iter = 0; iter < 1000; ++iter) {
+  for (let iter = 0; iter < 10000; ++iter) {
     let pattern = randomRoadPattern();
 
     let edge = rand.range(4);
@@ -663,7 +664,7 @@ function getCellFrame(cell, x, y, z) {
       if (!cell.anim) {
         cell.anim = createSpriteAnimation(ANIMDATA_DETAIL[cell.variation]);
         cell.anim.setState('idle');
-        cell.anim.update(rand.range(1000));
+        cell.anim.update(floor(random() * 1000));
       }
       frame = cell.anim.getFrame(engine.frame_dt);
       break;
@@ -1094,7 +1095,7 @@ function drawShop(x0, y0, w, h) {
       }
     }
     if (ui.buttonText({ x, y: y0 + h - ui.button_height, w: w/3, text: 'New', colors: colors_debug })) {
-      game_state = gameStateCreate(String(Math.random()));
+      game_state = gameStateCreate(String(random()));
     }
     if (ui.buttonText({ x: x + w/3, y: y0 + h - ui.button_height, w: w/3, text: 'Save', colors: colors_debug })) {
       saveGame();
@@ -1404,7 +1405,7 @@ function drawBoard(x0, y0, w, h) {
         if (game_state.cursor.cell.type === TYPE_DEBUG_WORKER) {
           game_state.workers.push({
             x: xx, y: yy,
-            dir: rand.range(4),
+            dir: floor(random() * 4),
             worker_fade: WORKER_FADE,
           });
         } else {
@@ -1829,7 +1830,7 @@ function stateMenu() {
     text: has_save ? 'New Game' : 'Start Game',
   })) {
     if (has_save) {
-      game_state = gameStateCreate(String(Math.random()));
+      game_state = gameStateCreate(String(random()));
     } else {
       game_state = gameStateCreate(INITIAL_GAME_SEED);
     }
