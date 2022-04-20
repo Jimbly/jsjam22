@@ -37,6 +37,7 @@ let font;
 let title_font;
 
 let auto_load = true;
+let fast_forward = false;
 
 let sprites = {};
 let particles;
@@ -1131,10 +1132,45 @@ function clearCell(x, y, just_sell) {
   cell.type = TYPE_EMPTY;
 }
 
+function pad2(v) {
+  return `0${v}`.slice(-2);
+}
+function timeFormat(ticks) {
+  let ms = ticks * TICK_TIME;
+  let s = floor(ms/1000);
+  let m = floor(s/60);
+  s %= 60;
+  return `${m}:${pad2(s)}`;
+}
+
 let fade_color = vec4(1,1,1,1);
 function drawBoard(x0, y0, w, h) {
   let dt = engine.frame_dt;
   ui.drawRect2({ x: x0, y: y0, w, h, color: pico8.colors[11], z: Z.BACKGROUND });
+
+  const FF_BUTTON_SIZE = ui.button_height;
+  if (ui.button({
+    x: x0 + w - FF_BUTTON_SIZE,
+    y: y0,
+    w: FF_BUTTON_SIZE, h: FF_BUTTON_SIZE,
+    img: sprites.tiles_ui,
+    frame: fast_forward ? 9 : 8,
+    tooltip: 'Toggle [F]ast-forward',
+    no_bg: true,
+  })) {
+    fast_forward = !fast_forward;
+  }
+  if (input.keyUpEdge(KEYS.F)) {
+    ui.playUISound('button_click');
+    fast_forward = !fast_forward;
+  }
+  // Show time
+  font.draw({
+    x: x0 + w - 4,
+    y: y0 + FF_BUTTON_SIZE,
+    align: font.ALIGN.HRIGHT,
+    text: timeFormat(game_state.num_ticks),
+  });
 
   camera2d.push();
   let cammap = camera2d.calcMap([], [x0, y0, x0 + w, y0 + h], [0,0,w,h]);
@@ -1479,7 +1515,7 @@ function tickState() {
 
 function statePlay(dt) {
 
-  if (input.keyDown(KEYS.SHIFT)) {
+  if (fast_forward) {
     dt *= 5;
   }
   if (dt >= game_state.tick_countdown) {
