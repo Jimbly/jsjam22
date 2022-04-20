@@ -301,7 +301,7 @@ function gameStateAddFirstLoop(state) {
   board[output_pos[1]][output_pos[0]].type = TYPE_SINK;
 }
 
-const GAME_STATE_VER = 3;
+const GAME_STATE_VER = 4;
 function gameStateCreate(seed) {
   rand = randCreate(mashString(seed));
   let board = [];
@@ -333,7 +333,7 @@ function gameStateCreate(seed) {
     tick_countdown: TICK_TIME,
     num_ticks: 0,
     resources: {
-      [RESOURCE_WOOD]: 1,
+      [RESOURCE_WATER]: 1,
     },
     ever_output: {},
     ver: GAME_STATE_VER,
@@ -730,54 +730,139 @@ function drawCell(cell, x, y, z, color) {
 
 const SHOP = [
   {
+    name: 'Output',
+    cell: {
+      type: TYPE_SINK,
+    },
+    cost: {
+      [RESOURCE_WOOD]: 5,
+    },
+  },
+  {
     name: 'Tree',
     cell: {
       type: TYPE_SOURCE,
       resource: RESOURCE_WOOD,
     },
     cost: {
-      [RESOURCE_BERRY]: 3,
+      [RESOURCE_WATER]: 1,
     },
   },
   {
-    name: 'Berry Bush',
-    cell: {
-      type: TYPE_SOURCE,
-      resource: RESOURCE_BERRY,
-    },
-    cost: {
-      [RESOURCE_WOOD]: 1,
-    },
-  },
-  {
-    name: 'Metal mine',
+    name: 'Mine',
     cell: {
       type: TYPE_SOURCE,
       resource: RESOURCE_METAL,
     },
     cost: {
-      [RESOURCE_WOOD]: 2,
+      [RESOURCE_WOOD]: 3,
     },
   },
   {
-    name: 'Output',
-    cell: {
-      type: TYPE_SINK,
-    },
-    cost: {
-      [RESOURCE_BERRY]: 15,
-    },
-  },
-  {
-    name: 'Craft metal',
+    name: 'Craft fire',
     cell: {
       type: TYPE_CRAFT,
       input0: RESOURCE_WOOD,
-      input1: RESOURCE_BERRY,
-      output: RESOURCE_METAL,
+      input1: RESOURCE_METAL,
+      output: RESOURCE_FIRE,
     },
     cost: {
-      [RESOURCE_METAL]: 1,
+      [RESOURCE_METAL]: 3,
+    },
+  },
+  {
+    name: 'Lake',
+    cell: {
+      type: TYPE_SOURCE,
+      resource: RESOURCE_WATER,
+    },
+    cost: {
+      [RESOURCE_FIRE]: 3,
+    },
+  },
+  {
+    name: 'Craft steam',
+    cell: {
+      type: TYPE_CRAFT,
+      input0: RESOURCE_FIRE,
+      input1: RESOURCE_WATER,
+      output: RESOURCE_STEAM,
+    },
+    cost: {
+      [RESOURCE_WATER]: 3,
+    },
+  },
+
+  {
+    name: 'Craft gold',
+    cell: {
+      type: TYPE_CRAFT,
+      input0: RESOURCE_WATER,
+      input1: RESOURCE_METAL,
+      output: RESOURCE_GOLD,
+    },
+    cost: {
+      [RESOURCE_STEAM]: 3,
+    },
+  },
+  {
+    name: 'Craft love',
+    cell: {
+      type: TYPE_CRAFT,
+      input0: RESOURCE_WOOD,
+      input1: RESOURCE_WATER,
+      output: RESOURCE_LOVE,
+    },
+    cost: {
+      [RESOURCE_GOLD]: 3,
+    },
+  },
+  {
+    name: 'Craft gold "paint"',
+    cell: {
+      type: TYPE_CRAFT,
+      input0: RESOURCE_FIRE,
+      input1: RESOURCE_GOLD,
+      output: RESOURCE_GOLDPAINT,
+    },
+    cost: {
+      [RESOURCE_LOVE]: 3,
+    },
+  },
+  {
+    name: 'Craft gears',
+    cell: {
+      type: TYPE_CRAFT,
+      input0: RESOURCE_STEAM,
+      input1: RESOURCE_WOOD,
+      output: RESOURCE_GEARS,
+    },
+    cost: {
+      [RESOURCE_GOLDPAINT]: 3,
+    },
+  },
+  {
+    name: 'Craft cow',
+    cell: {
+      type: TYPE_CRAFT,
+      input0: RESOURCE_GEARS,
+      input1: RESOURCE_LOVE,
+      output: RESOURCE_COW,
+    },
+    cost: {
+      [RESOURCE_GEARS]: 3,
+    },
+  },
+  {
+    name: 'Craft harmless statue',
+    cell: {
+      type: TYPE_CRAFT,
+      input0: RESOURCE_GOLDPAINT,
+      input1: RESOURCE_COW,
+      output: RESOURCE_GOLDENCOW,
+    },
+    cost: {
+      [RESOURCE_COW]: 3,
     },
   },
 
@@ -810,8 +895,9 @@ function payCost(shop_elem, scale) {
 
 function sameShopItem(a, b) {
   return a.cell.type === b.cell.type && (
-    a.cell.resource === b.cell.resource ||
-    !a.cell.resource && !b.cell.resource
+    a.cell.resource === b.cell.resource || !a.cell.resource && !b.cell.resource
+  ) && (
+    a.cell.type !== TYPE_CRAFT || a.cell.output === b.cell.output
   );
 }
 
@@ -1260,7 +1346,7 @@ function drawBoard(x0, y0, w, h) {
       return;
     }
     let cell_param = { x, y, w: TILE_SIZE, h: TILE_SIZE };
-    if (input.click(cell_param)) {
+    if (input.click({ ...cell_param, button: 0 })) {
       // outputResource(resource, x, y, target_offset);
       ui.playUISound('delete');
       delete cell_or_worker.resource;
