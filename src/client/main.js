@@ -70,6 +70,9 @@ const RESOURCE_LOVE = 5;
 const RESOURCE_WATER = 6;
 const RESOURCE_FIRE = 7;
 const RESOURCE_COW = 8;
+const RESOURCE_STEAM = 9;
+const RESOURCE_GEARS = 10;
+const RESOURCE_GOLDPAINT = 11;
 const RESOURCE_GOLDENCOW = 100;
 const RESOURCE_FRAMES = {
   [RESOURCE_WOOD]: 9,
@@ -78,9 +81,12 @@ const RESOURCE_FRAMES = {
   [RESOURCE_LOVE]: 13,
   [RESOURCE_WATER]: 19,
   [RESOURCE_FIRE]: 20,
+  [RESOURCE_STEAM]: 21,
+  [RESOURCE_GEARS]: 22,
   [RESOURCE_METAL]: 27,
   [RESOURCE_COW]: 28,
   [RESOURCE_GOLDENCOW]: 29,
+  [RESOURCE_GOLDPAINT]: 30,
 };
 
 const ANIMDATA_DETAIL = [
@@ -1188,6 +1194,7 @@ function timeFormat(ticks) {
 }
 
 let fade_color = vec4(1,1,1,1);
+let shadow_color = vec4(1,1,1,0.5);
 function drawBoard(x0, y0, w, h) {
   let dt = engine.frame_dt;
   ui.drawRect2({ x: x0, y: y0, w, h, color: pico8.colors[11], z: Z.BACKGROUND });
@@ -1377,12 +1384,19 @@ function drawBoard(x0, y0, w, h) {
       }
     }
     let { x, y, lastx, lasty, worker_fade } = worker;
+    let y_base = y;
+    let shadow_scale = 1;
     if (lastx !== undefined && a < 1) {
       x = lerp(ainout, lastx, x);
-      y = lerp(ainout, lasty, y) + sin(ainout * PI) * -0.5;
+      y = lerp(ainout, lasty, y);
+      y_base = y;
+      let offs = sin(ainout * PI);
+      shadow_scale = 1 - offs * 0.5;
+      y += offs * -0.5;
     }
     x *= TILE_SIZE;
     y *= TILE_SIZE;
+    y_base *= TILE_SIZE;
     if (!worker.anim) {
       worker.anim = createSpriteAnimation(ANIMDATA_WORKER);
       worker.anim.setState('idle');
@@ -1400,6 +1414,15 @@ function drawBoard(x0, y0, w, h) {
       frame: worker.anim.getFrame(dt),
       color: fade_color,
     });
+    if (y !== y_base) {
+      sprites.tiles_centered.draw({
+        x: x + TILE_SIZE/2, y: y_base + TILE_SIZE/2 + (1 - shadow_scale) * 4, z: Z.WORKERS - 0.5,
+        frame: 7,
+        color: shadow_color,
+        w: shadow_scale, h: shadow_scale,
+        nozoom: true,
+      });
+    }
     drawCarried(worker, x, y, CARRY_OFFSET_SOURCE_SINK, CARRY_OFFSET_WORKER);
     let click_param = {
       x, y, w: TILE_SIZE, h: TILE_SIZE,
