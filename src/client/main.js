@@ -5,7 +5,7 @@ local_storage.setStoragePrefix('jsjam22'); // Before requiring anything else tha
 const assert = require('assert');
 const camera2d = require('glov/client/camera2d.js');
 const engine = require('glov/client/engine.js');
-const { style } = require('glov/client/font.js');
+const { style, styleColored } = require('glov/client/font.js');
 const input = require('glov/client/input.js');
 const { KEYS } = input;
 const { floor, max, sin, random, PI } = Math;
@@ -14,6 +14,7 @@ const particle_data = require('./particle_data.js');
 const { preloadParticleData } = require('glov/client/particles.js');
 const pico8 = require('glov/client/pico8.js');
 const { mashString, randCreate } = require('glov/common/rand_alea.js');
+const score_system = require('glov/client/score.js');
 const { scrollAreaCreate } = require('glov/client/scroll_area.js');
 const settings = require('glov/client/settings.js');
 const { soundPlayMusic } = require('glov/client/sound.js');
@@ -583,6 +584,25 @@ function gameStateAddProgress(state) {
   }
 }
 
+function encodeScore(score) {
+  let ticks = max(999999 - score.ticks, 0);
+  return (score.tech || 0) * 1000000 + ticks;
+}
+
+function parseScore(value) {
+  let tech = floor(value / 1000000);
+  value -= tech * 1000000;
+  let ticks = 999999 - value;
+  return {
+    ticks,
+    tech,
+  };
+}
+
+let level_list = [{
+  name: 'the',
+}];
+
 function init() {
   sprites.tiles = createSprite({
     name: 'tiles',
@@ -621,6 +641,9 @@ function init() {
   });
 
   preloadParticleData(particle_data);
+
+  score_system.init(encodeScore, parseScore, level_list, 'JS22');
+  score_system.updateHighScores();
 
   game_state = gameStateCreate(INITIAL_GAME_SEED);
 }
@@ -950,6 +973,22 @@ function updateFloaters() {
   }
 }
 
+let high_score_from_victory = false;
+
+function youWin() {
+  ui.modalDialog({
+    text: 'You win!\n\nCongratulations, you have successfully demonstrated your ingenuity and' +
+      ' resourcefulness by creating a wonderful artifact that shall be respectfully' +
+      ' admired by all.',
+    buttons: {
+      Yay: null,
+    },
+  });
+  high_score_from_victory = true;
+  // eslint-disable-next-line no-use-before-define
+  engine.setState(stateHighScores);
+}
+
 // Assume x/y are in board camera space
 function outputResource(resource, x0, y0, offs) {
   game_state.resources[resource] = (game_state.resources[resource] || 0) + 1;
@@ -962,6 +1001,12 @@ function outputResource(resource, x0, y0, offs) {
   if (!game_state.ever_output[resource]) {
     game_state.ever_output[resource] = true;
     gameStateAddProgress(game_state);
+    score_system.setScore(0,
+      { ticks: game_state.num_ticks, tech: resource }
+    );
+    if (resource === RESOURCE_GOLDENCOW) {
+      youWin();
+    }
   }
 }
 
@@ -1796,6 +1841,157 @@ let transitioner = createTransitioner({
   interactable_at: 100,
 });
 
+const MENU_BUTTON_W = 96;
+const MENU_BUTTON_H = 22;
+
+let scores_edit_box;
+function stateHighScores() {
+  v4copy(engine.border_clear_color, pico8.colors[11]);
+  gl.clearColor(...pico8.colors[11]);
+
+  let width = 280;
+  let x = (game_width - width) / 2;
+  let y = 0;
+  let z = Z.UI + 10;
+  let size = 8;
+  let pad = size;
+  title_font.drawSizedAligned(styleColored(null, pico8.font_colors[0]),
+    x, y, z, size * 2, font.ALIGN.HCENTERFIT, width, 0, 'HIGH SCORES');
+  y += size * 2 + 2;
+  ui.drawLine(x + 130, y, x+width - 130, y, z, 1, 1, pico8.colors[5]);
+  y += 4;
+  let level_id = 'the';
+  let scores = score_system.high_scores[level_id];
+  let score_style = styleColored(null, pico8.font_colors[1]);
+  if (!scores) {
+    font.drawSizedAligned(score_style, x, y, z, size, font.ALIGN.HCENTERFIT, width, 0,
+      'Loading...');
+    return;
+  }
+  let widths = [10, 60, 24, 24];
+  let widths_total = 0;
+  for (let ii = 0; ii < widths.length; ++ii) {
+    widths_total += widths[ii];
+  }
+  let set_pad = size / 2;
+  for (let ii = 0; ii < widths.length; ++ii) {
+    widths[ii] *= (width - set_pad * (widths.length - 1)) / widths_total;
+  }
+  let align = [
+    font.ALIGN.HFIT | font.ALIGN.HRIGHT,
+    font.ALIGN.HFIT,
+    font.ALIGN.HFIT | font.ALIGN.HCENTER,
+    font.ALIGN.HFIT | font.ALIGN.HCENTER,
+  ];
+  let line_advance = size;
+  function drawSet(arr, use_style, header) {
+    let xx = x;
+    for (let ii = 0; ii < arr.length; ++ii) {
+      if (ii === 2 && typeof arr[ii] === 'number') {
+        sprites.tiles.draw({
+          x: xx + (widths[ii] - TILE_SIZE)/2, y: y, z,
+          frame: RESOURCE_FRAMES[arr[ii]],
+        });
+      } else {
+        let str = String(arr[ii]);
+        font.drawSizedAligned(use_style, xx, y, z, size, align[ii], widths[ii], 0, str);
+      }
+      xx += widths[ii] + set_pad;
+    }
+    y += line_advance;
+  }
+  drawSet(['', 'Name', 'Tech', 'Time'], styleColored(null, pico8.font_colors[5]), true);
+  line_advance = TILE_SIZE + 1;
+  y += 2;
+  ui.drawLine(x, y, x+width, y, z, 1, 1, pico8.colors[0]);
+  y += 4;
+  let found_me = false;
+  for (let ii = 0; ii < scores.length; ++ii) {
+    let s = scores[ii % scores.length];
+    let use_style = score_style;
+    let drawme = false;
+    if (s.name === score_system.player_name && !found_me) {
+      use_style = styleColored(null, pico8.font_colors[8]);
+      found_me = true;
+      drawme = true;
+    }
+    if (ii < 16 || drawme) {
+      drawSet([
+        `#${ii+1}`, score_system.formatName(s), s.score.tech,
+        timeFormat(s.score.ticks)
+      ], use_style);
+    }
+  }
+  y += set_pad;
+  if (found_me && score_system.player_name.indexOf('Anonymous') === 0) {
+    if (!scores_edit_box) {
+      scores_edit_box = ui.createEditBox({
+        z,
+        w: game_width / 4,
+      });
+      scores_edit_box.setText(score_system.player_name);
+    }
+
+    if (scores_edit_box.run({
+      x,
+      y,
+    }) === scores_edit_box.SUBMIT || ui.buttonText({
+      x: x + scores_edit_box.w + size,
+      y: y - size * 0.25,
+      z,
+      w: size * 13,
+      h: ui.button_height,
+      text: 'Update Player Name'
+    })) {
+      // scores_edit_box.text
+      if (scores_edit_box.text) {
+        score_system.updatePlayerName(scores_edit_box.text);
+      }
+    }
+    y += size;
+  }
+
+  y += pad;
+
+  // ui.panel({
+  //   x: x - pad,
+  //   w: game_width / 2 + pad * 2,
+  //   y: y0 - pad,
+  //   h: y - y0 + pad * 2,
+  //   z: z - 1,
+  //   color: vec4(0, 0, 0, 1),
+  // });
+
+  // ui.menuUp();
+
+  let button_x = (game_width - MENU_BUTTON_W) / 2;
+  if (high_score_from_victory) {
+    button_x -= MENU_BUTTON_W / 2 + 4;
+    if (ui.button({
+      x: button_x,
+      y: game_height - MENU_BUTTON_H - 4,
+      w: MENU_BUTTON_W, h: MENU_BUTTON_H,
+      text: 'Continue Playing',
+    })) {
+      transition.queue(Z.TRANSITION_FINAL, transition.pixelate(500));
+      // eslint-disable-next-line no-use-before-define
+      engine.setState(statePlay);
+    }
+    button_x += MENU_BUTTON_W + 4;
+  }
+
+  if (ui.button({
+    x: button_x,
+    y: game_height - MENU_BUTTON_H - 4,
+    w: MENU_BUTTON_W, h: MENU_BUTTON_H,
+    text: 'Main Menu',
+  })) {
+    transition.queue(Z.TRANSITION_FINAL, transition.fade(500));
+    // eslint-disable-next-line no-use-before-define
+    engine.setState(stateMenu);
+  }
+}
+
 let cow_rot = 0;
 function stateMenu() {
   transitioner.update();
@@ -1838,15 +2034,16 @@ function stateMenu() {
     frame: RESOURCE_FRAMES[RESOURCE_GOLDENCOW],
     x,
     y: COW_Y,
+    z: Z.UI - 1,
     w: COW_SCALE, h: COW_SCALE,
     rot: cow_rot,
   });
 
-  let button_w = 96;
-  let button_h = 22;
+  let button_w = MENU_BUTTON_W;
+  let button_h = MENU_BUTTON_H;
   let pad = 4;
   let has_save = hasSaveGame();
-  let num_buttons = has_save ? 2 : 1;
+  let num_buttons = has_save ? 3 : 2;
   y = floor(game_height * 2/3);
   x = (game_width - button_w * num_buttons + (num_buttons - 1) * pad) / 2;
   color = transitioner.getFadeButtonColor('menu_buttons');
@@ -1876,6 +2073,18 @@ function stateMenu() {
     }
     engine.setState(statePlay);
     transition.queue(Z.TRANSITION_FINAL, transition.pixelate(500));
+  }
+  x += button_w + pad;
+  if (ui.button({
+    x, y,
+    w: button_w, h: button_h,
+    color,
+    text: 'High Scores',
+  })) {
+    score_system.updateHighScores();
+    high_score_from_victory = false;
+    engine.setState(stateHighScores);
+    transition.queue(Z.TRANSITION_FINAL, transition.fade(500));
   }
   x += button_w + pad;
 
@@ -1970,5 +2179,5 @@ export function main() {
   init();
 
   pumpMusic();
-  engine.setState(engine.DEBUG ? statePlay : stateMenu);
+  engine.setState(engine.DEBUG ? stateHighScores : stateMenu);
 }
