@@ -32,6 +32,8 @@ Z.FLOATERS = 200;
 const game_width = 640;
 const game_height = 384;
 
+let auto_load = true;
+
 let sprites = {};
 let particles;
 
@@ -203,6 +205,7 @@ function gameStateAddFirstLoop(state) {
   board[output_pos[1]][output_pos[0]].type = TYPE_SINK;
 }
 
+const GAME_STATE_VER = 2;
 function gameStateCreate(seed) {
   rand = randCreate(mashString(seed));
   let board = [];
@@ -233,20 +236,20 @@ function gameStateCreate(seed) {
     tick_countdown: TICK_TIME,
     num_ticks: 0,
     resources: {},
+    ever_output: {},
+    ver: GAME_STATE_VER,
   };
   gameStateAddFirstLoop(state);
   return state;
 }
 
 function randomRoadPattern() {
-  let type = rand.range(2);
-  if (type === 0) {
+  let value = rand.random();
+  if (value < 0.333) {
     return patternLoop();
-  } else if (type === 1) {
+  } else {
     return patternBend();
   }
-  assert(false);
-  return null;
 }
 
 function boardIsRoadDelta(board, x, y, delta) {
@@ -330,6 +333,106 @@ function gameStateAddRoad(state) {
   });
 }
 
+const BOUNCE_ORDER = [0, 1, 3, 2];
+
+function gameStateAddProgress(state) {
+  let seen = {}; // index -> road
+  let roads = [];
+  let { board, w, workers } = state;
+  function findRoad(x, y) {
+    let ret = [];
+    let to_search = [];
+    function push(xx, yy) {
+      let idx = xx + yy * w;
+      if (seen[idx]) {
+        return;
+      }
+      seen[idx] = ret;
+      let pair = [xx, yy];
+      ret.push(pair);
+      to_search.push(pair);
+    }
+    push(x, y);
+    while (to_search.length) {
+      let pos = to_search.pop();
+      ([x, y] = pos);
+      for (let ii = 0; ii < DX.length; ++ii) {
+        let x2 = x + DX[ii];
+        let y2 = y + DY[ii];
+        let cell = board[y2]?.[x2];
+        if (!cell) {
+          continue;
+        }
+        if (cell.type === TYPE_ROAD) {
+          push(x2, y2);
+        }
+      }
+    }
+    return ret;
+  }
+  for (let yy = 0; yy < board.length; ++yy) {
+    let row = board[yy];
+    for (let xx = 0; xx < row.length; ++xx) {
+      let cell = row[xx];
+      let idx = xx + yy * w;
+      if (seen[idx]) {
+        continue;
+      }
+      if (cell.type === TYPE_ROAD) {
+        let road = findRoad(xx, yy);
+        roads.push(road);
+      }
+    }
+  }
+  for (let ii = 0; ii < workers.length; ++ii) {
+    let worker = workers[ii];
+    let { x, y } = worker;
+    let idx = x + y * w;
+    let road = seen[idx];
+    road.num_workers = (road.num_workers || 0) + 1;
+    road.last_worker = worker;
+  }
+  let non_full_roads = roads.filter((r) => !(r.num_workers > 1));
+  if (non_full_roads.length) {
+    // can add a new worker
+    let road = non_full_roads[rand.range(non_full_roads.length)];
+    let { last_worker } = road;
+    let { x, y, dir } = last_worker;
+    // want adjacent to this worker, going away from the worker
+    for (let ii = 0; ii < DX.length; ++ii) {
+      let x2 = x + DX[ii];
+      let y2 = y + DY[ii];
+      let idx = x2 + y2 * w;
+      if (seen[idx]) { // it's a road there
+        // Find out what direction the old worker is heading
+        for (let jj = 0; jj < BOUNCE_ORDER.length; ++jj) {
+          let dd = (dir + BOUNCE_ORDER[jj]) % 4;
+          let destx = x + DX[dd];
+          let desty = y + DY[dd];
+          if (board[desty][destx].type === TYPE_ROAD) {
+            if (destx === x2 && desty === y2) {
+              // he's moving onto us, move the opposite of his movement
+              workers.push({
+                x: x2, y: y2, dir: (dd + 2) % 4,
+              });
+            } else {
+              // he's moving away from us, move away from him
+              workers.push({
+                x: x2, y: y2, dir: ii,
+              });
+            }
+            break;
+          }
+        }
+        break;
+      }
+    }
+  } else {
+    // must add a new road
+    gameStateAddRoad(state);
+  }
+}
+
 function gameToJson(state) {
   let ret = clone(state);
   let { board } = ret;
@@ -362,6 +465,13 @@ function init() {
     ws: [TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE],
     hs: [TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE],
     size: vec2(TILE_SIZE, TILE_SIZE),
+  });
+  sprites.tiles_ui_centered = createSprite({
+    name: 'tiles_ui',
+    ws: [TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE],
+    hs: [TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE],
+    size: vec2(TILE_SIZE, TILE_SIZE),
+    origin: vec2(0.5, 0.5),
   });
 
   preloadParticleData(particle_data);
@@ -549,6 +659,10 @@ function outputResource(resource, x0, y0, offs) {
       color,
     });
   });
+  if (!game_state.ever_output[resource]) {
+    game_state.ever_output[resource] = true;
+    gameStateAddProgress(game_state);
+  }
 }
 
 function drawShop(x0, y0, w, h) {
@@ -588,8 +702,8 @@ function drawShop(x0, y0, w, h) {
 
 
   if (engine.DEBUG) {
-    if (ui.buttonText({ x, y: y0 + h - ui.button_height * 2 - PAD, w: w/3, text: '+Road', colors: colors_debug })) {
-      gameStateAddRoad(game_state);
+    if (ui.buttonText({ x, y: y0 + h - ui.button_height * 2 - PAD, w: w/3, text: '+Prog', colors: colors_debug })) {
+      gameStateAddProgress(game_state);
     }
     if (ui.buttonText({ x, y: y0 + h - ui.button_height, w: w/3, text: 'New', colors: colors_debug })) {
       game_state = gameStateCreate(String(Math.random()));
@@ -597,22 +711,17 @@ function drawShop(x0, y0, w, h) {
     if (ui.buttonText({ x: x + w/3, y: y0 + h - ui.button_height, w: w/3, text: 'Save', colors: colors_debug })) {
       local_storage.setJSON('state', gameToJson(game_state));
     }
-    if (ui.buttonText({ x: x + w*2/3, y: y0 + h - ui.button_height, w: w/3, text: 'Load', colors: colors_debug }) ||
-      engine.DEBUG && engine.frame_timestamp < 2000 && !game_state.num_ticks
-    ) {
-      game_state = local_storage.getJSON('state');
+  }
+  if (auto_load ||
+    engine.DEBUG &&
+    ui.buttonText({ x: x + w*2/3, y: y0 + h - ui.button_height, w: w/3, text: 'Load', colors: colors_debug })
+  ) {
+    auto_load = false;
+    let state = local_storage.getJSON('state');
+    if (state && state.ver === GAME_STATE_VER) {
+      game_state = state;
       if (game_state.seed) {
         rand.importState(game_state.seed);
-      }
-      // Fixup old data
-      let { board } = game_state;
-      for (let yy = 0; yy < board.length; ++yy) {
-        let row = board[yy];
-        for (let xx = 0; xx < row.length; ++xx) {
-          let cell = row[xx];
-          cell.x = xx;
-          cell.y = yy;
-        }
       }
     }
   }
@@ -920,6 +1029,19 @@ function drawBoard(x0, y0, w, h) {
       frame: 5,
     });
     drawCarried(worker, x, y, CARRY_OFFSET_SOURCE_SINK, CARRY_OFFSET_WORKER);
+    let click_param = {
+      x, y, w: TILE_SIZE, h: TILE_SIZE,
+    };
+    if (!worker.stunned && input.click(click_param)) {
+      worker.stunned = 2;
+    }
+    if (worker.stunned) {
+      sprites.tiles_ui_centered.draw({
+        x: x + TILE_SIZE/2, y: y + TILE_SIZE/2, z: Z.WORKERS + 5,
+        frame: 2,
+        rot: engine.frame_timestamp * 0.005,
+      });
+    }
   }
 
 
@@ -982,7 +1104,6 @@ function getQuadCell(x, y, quad) {
   return game_state.board[y][x];
 }
 
-const BOUNCE_ORDER = [0, 1, 3, 2];
 function tickState() {
   let { board, workers } = game_state;
 
@@ -1019,6 +1140,10 @@ function tickState() {
     delete worker.lastx;
     delete worker.resource_from;
     let did_anything = false;
+    if (worker.stunned) {
+      --worker.stunned;
+      continue;
+    }
     if (!worker.resource) {
       // check for pickup
       for (let jj = 0; !did_anything && jj < DX.length; ++jj) {
