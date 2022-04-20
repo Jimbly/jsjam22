@@ -971,7 +971,7 @@ let scroll_area = scrollAreaCreate({
 function drawShop(x0, y0, w, h) {
   const PAD = 4;
   const BUTTON_H = 22;
-  const BUTTON_W = 74;
+  const BUTTON_W = 76;
   let x = x0;
   let y = y0;
   ui.drawRect2({ x, y, w, h, color: pico8.colors[15], z: Z.UI - 1 });
@@ -1013,12 +1013,12 @@ function drawShop(x0, y0, w, h) {
         z: Z.UI,
         frame: 4,
       });
-      xx += TILE_SIZE - 4;
+      xx += TILE_SIZE - 3;
       sprites.tiles.draw({
         x: xx, y: yy, z: Z.UI + 1,
         frame: RESOURCE_FRAMES[input1],
       });
-      xx += TILE_SIZE - 3;
+      xx += TILE_SIZE - 2;
       sprites.tiles_ui.draw({
         x: xx,
         y: yy,
