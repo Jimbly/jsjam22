@@ -1849,34 +1849,20 @@ function stateHighScores() {
   v4copy(engine.border_clear_color, pico8.colors[11]);
   gl.clearColor(...pico8.colors[11]);
 
-  // let title_style = style(null, {
-  //   color: pico8.font_colors[7],
-  //   outline_width: 2,
-  //   outline_color: pico8.font_colors[1],
-  //   glow_xoffs: 2,
-  //   glow_yoffs: 2,
-  //   glow_inner: -2.5,
-  //   glow_outer: 5,
-  //   glow_color: pico8.font_colors[2],
-  // });
-  // let subtitle_style = null;
-  // let subtitle_style2 = style(subtitle_style, {
-  //   color: pico8.font_colors[5],
-  // });
-
   let width = 280;
   let x = (game_width - width) / 2;
   let y = 0;
   let z = Z.UI + 10;
   let size = 8;
   let pad = size;
-  title_font.drawSizedAligned(null, x, y, z, size * 2, font.ALIGN.HCENTERFIT, width, 0, 'HIGH SCORES');
+  title_font.drawSizedAligned(styleColored(null, pico8.font_colors[0]),
+    x, y, z, size * 2, font.ALIGN.HCENTERFIT, width, 0, 'HIGH SCORES');
   y += size * 2 + 2;
   ui.drawLine(x + 130, y, x+width - 130, y, z, 1, 1, pico8.colors[5]);
   y += 4;
   let level_id = 'the';
   let scores = score_system.high_scores[level_id];
-  let score_style = styleColored(null, pico8.font_colors[7]);
+  let score_style = styleColored(null, pico8.font_colors[1]);
   if (!scores) {
     font.drawSizedAligned(score_style, x, y, z, size, font.ALIGN.HCENTERFIT, width, 0,
       'Loading...');
@@ -1916,7 +1902,7 @@ function stateHighScores() {
   }
   drawSet(['', 'Name', 'Tech', 'Time'], styleColored(null, pico8.font_colors[5]), true);
   line_advance = TILE_SIZE + 1;
-  y += 4;
+  y += 2;
   ui.drawLine(x, y, x+width, y, z, 1, 1, pico8.colors[0]);
   y += 4;
   let found_me = false;
@@ -1925,7 +1911,7 @@ function stateHighScores() {
     let use_style = score_style;
     let drawme = false;
     if (s.name === score_system.player_name && !found_me) {
-      use_style = styleColored(null, pico8.font_colors[3]);
+      use_style = styleColored(null, pico8.font_colors[8]);
       found_me = true;
       drawme = true;
     }
@@ -2193,5 +2179,5 @@ export function main() {
   init();
 
   pumpMusic();
-  engine.setState(engine.DEBUG ? statePlay : stateMenu);
+  engine.setState(engine.DEBUG ? stateHighScores : stateMenu);
 }
