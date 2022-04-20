@@ -1091,6 +1091,11 @@ function drawShop(x0, y0, w, h) {
 
   scroll_area.end(y);
 
+  if (game_state.cursor && input.click({ x: x0, y: y0, w, h })) {
+    ui.playUISound('refund');
+    refundCursor();
+  }
+
   if (engine.DEBUG) {
     if (ui.buttonText({ x, y: y0 + h - ui.button_height * 2 - PAD, w: w/3, text: '+Prog', colors: colors_debug })) {
       gameStateAddProgress(game_state);
@@ -1325,6 +1330,26 @@ function drawBoard(x0, y0, w, h) {
     transition.queue(Z.TRANSITION_FINAL, transition.pixelate(500));
   }
 
+  let { board, workers, cursor } = game_state;
+
+  if (cursor && ui.button({
+    x: x0 + w - FF_BUTTON_SIZE - 2,
+    y: y0 + h - FF_BUTTON_SIZE - 2,
+    w: FF_BUTTON_SIZE, h: FF_BUTTON_SIZE,
+    img: sprites.tiles_ui,
+    frame: 3,
+    tooltip: '[Esc] Refund item',
+    max_dist: Infinity,
+  })) {
+    refundCursor();
+    cursor = null;
+  }
+  if (cursor && input.keyUpEdge(KEYS.ESC)) {
+    ui.playUISound('refund');
+    refundCursor();
+    cursor = null;
+  }
+
   // Show time
   font.draw({
     x: x0 + w - 4,
@@ -1338,7 +1363,6 @@ function drawBoard(x0, y0, w, h) {
   camera2d.set(cammap[0], cammap[1], cammap[2], cammap[3]);
   // now working in [0,0]...[w,h] space
 
-  let { board, workers } = game_state;
   let tick_progress = 1 - game_state.tick_countdown / TICK_TIME;
   let a = 1;
   let ainout;
@@ -1408,9 +1432,9 @@ function drawBoard(x0, y0, w, h) {
       if (cell.type !== TYPE_SOURCE) {
         drawCarried(cell, x, y, CARRY_OFFSET_WORKER, CARRY_OFFSET_SOURCE_SINK, cell.type === TYPE_SINK);
       }
-      if (game_state.cursor && canPlace(game_state.cursor.cell, xx, yy) && input.click(click_param)) {
+      if (cursor && canPlace(cursor.cell, xx, yy) && input.click({ ...click_param, button: 0, max_dist: Infinity })) {
         ui.playUISound('place');
-        if (game_state.cursor.cell.type === TYPE_DEBUG_WORKER) {
+        if (cursor.cell.type === TYPE_DEBUG_WORKER) {
           game_state.workers.push({
             x: xx, y: yy,
             dir: floor(random() * 4),
@@ -1418,26 +1442,29 @@ function drawBoard(x0, y0, w, h) {
           });
         } else {
           clearCell(xx, yy);
-          for (let key in game_state.cursor.cell) {
-            cell[key] = game_state.cursor.cell[key];
+          for (let key in cursor.cell) {
+            cell[key] = cursor.cell[key];
           }
           cell.rot = cell.rot || 0;
           cell.x = xx;
           cell.y = yy;
         }
         if (!input.keyDown(KEYS.SHIFT)) {
-          game_state.cursor = null;
+          cursor = game_state.cursor = null;
         }
-      } else if (TYPE_PICKUPABLE[cell.type] && input.click({ ...click_param, button: 2 })) {
+      } else if (TYPE_PICKUPABLE[cell.type] && (
+        input.click({ ...click_param, button: 2 }) ||
+        input.longPress(click_param)
+      )) {
         ui.playUISound('pickup');
         refundCursor();
-        game_state.cursor = {
+        cursor = game_state.cursor = {
           cell: clone(cell),
         };
-        if (game_state.cursor.cell.type !== TYPE_SOURCE) {
-          delete game_state.cursor.cell.resource;
+        if (cursor.cell.type !== TYPE_SOURCE) {
+          delete cursor.cell.resource;
         }
-        delete game_state.cursor.cell.resource_from;
+        delete cursor.cell.resource_from;
         clearCell(xx, yy);
         cell.type = TYPE_EMPTY;
       }
@@ -1539,6 +1566,11 @@ function drawBoard(x0, y0, w, h) {
     }
   }
 
+  if (cursor && input.click({ button: 2 })) {
+    ui.playUISound('refund');
+    refundCursor();
+    cursor = null;
+  }
 
   let mouse_over = input.mouseOver({ x: 0, y: 0, w, h });
   let drew_cursor = false;
@@ -1549,12 +1581,12 @@ function drawBoard(x0, y0, w, h) {
     let y = floor(mouse_pos[1] / TILE_SIZE);
     let cell = board[y]?.[x];
     if (cell) {
-      if (game_state.cursor) {
+      if (cursor) {
         drew_cursor = true;
-        if (canPlace(game_state.cursor.cell, x, y)) {
-          drawCell(game_state.cursor.cell, x * TILE_SIZE, y * TILE_SIZE, Z.UI, color_ghost);
+        if (canPlace(cursor.cell, x, y)) {
+          drawCell(cursor.cell, x * TILE_SIZE, y * TILE_SIZE, Z.UI, color_ghost);
         } else {
-          drawCell(game_state.cursor.cell, x * TILE_SIZE, y * TILE_SIZE, Z.UI, color_invalid);
+          drawCell(cursor.cell, x * TILE_SIZE, y * TILE_SIZE, Z.UI, color_invalid);
         }
       }
       // No: only on right click currently
@@ -1575,12 +1607,12 @@ function drawBoard(x0, y0, w, h) {
 
   camera2d.pop();
 
-  if (game_state.cursor && !drew_cursor) {
+  if (cursor && !drew_cursor) {
     let mouse_pos = input.mousePos();
-    drawCell(game_state.cursor.cell, mouse_pos[0] - TILE_SIZE/2, mouse_pos[1] - TILE_SIZE/2, Z.UI + 10, color_ghost);
+    drawCell(cursor.cell, mouse_pos[0] - TILE_SIZE/2, mouse_pos[1] - TILE_SIZE/2, Z.UI + 10, color_ghost);
   }
 
-  if (game_state.cursor) {
+  if (cursor) {
     let cell = game_state.cursor.cell;
     if (TYPE_ROTATABLE[cell.type]) {
       let wheel = input.mouseWheel();
@@ -1916,6 +1948,7 @@ export function main() {
       place: ['down1', 'down2', 'down3'],
       pickup: ['upchord1', 'upchord2', 'upchord3'],
       rotate: ['upchord1', 'upchord2', 'upchord3'],
+      refund: ['upchord1', 'upchord2', 'upchord3'],
       stun: 'button_click',
       delete: 'button_click',
       // worker actions
