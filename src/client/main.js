@@ -35,12 +35,12 @@ Z.PARTICLES = 150;
 Z.FLOATERS = 200;
 
 // Virtual viewport for our game logic
-const game_width = 640;
+const game_width = 640; // - 12;
 const game_height = 384;
 let font;
 let title_font;
 
-let auto_load = false;
+let auto_load = true;
 let fast_forward = false;
 
 let sprites = {};
@@ -1044,7 +1044,7 @@ function drawShop(x0, y0, w, h) {
     }
     let disabled = false;
     let xx = x + BUTTON_W + 4;
-    const COST_W = 42;
+    const COST_W = 34;
     for (let key in cost) {
       let have = resources[key] || 0;
       let need = cost[key];
@@ -1755,7 +1755,7 @@ function statePlay(dt) {
     game_state.tick_countdown -= dt;
   }
 
-  const SHOP_W = game_width/4;
+  const SHOP_W = 148;
   drawShop(0, 0, SHOP_W, game_height);
   drawBoard(SHOP_W, 0, game_width - SHOP_W, game_height);
 }
