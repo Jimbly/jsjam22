@@ -1647,10 +1647,11 @@ function tickState() {
     }
     if (worker.resource) {
       // check for drop off
+      // First crafting inputs
       for (let jj = 0; !did_anything && jj < DX.length; ++jj) {
         let nx = x + DX[jj];
         let ny = y + DY[jj];
-        if (typeAt(nx, ny) === TYPE_SINK) {
+        if (craftingInputAt(nx, ny, worker.resource)) {
           let target_cell = board[ny][nx];
           if (!target_cell.resource) {
             target_cell.resource = worker.resource;
@@ -1660,7 +1661,12 @@ function tickState() {
             break;
           }
         }
-        if (craftingInputAt(nx, ny, worker.resource)) {
+      }
+      // then outputs
+      for (let jj = 0; !did_anything && jj < DX.length; ++jj) {
+        let nx = x + DX[jj];
+        let ny = y + DY[jj];
+        if (typeAt(nx, ny) === TYPE_SINK) {
           let target_cell = board[ny][nx];
           if (!target_cell.resource) {
             target_cell.resource = worker.resource;
