@@ -273,6 +273,8 @@ function gameStateAddPattern(state, pattern, x, y) {
     dir: rand.range(4),
     worker_fade: WORKER_FADE,
   });
+
+  ++state.num_roads;
 }
 
 function gameStateAddFirstLoop(state) {
@@ -338,17 +340,23 @@ function gameStateCreate(seed) {
     },
     ever_output: {},
     ver: GAME_STATE_VER,
+    num_roads: 0,
   };
   gameStateAddFirstLoop(state);
   return state;
 }
 
-function randomRoadPattern() {
-  let value = rand.random();
-  if (value < 0.333) {
-    return patternLoop();
-  } else {
+function randomRoadPattern(ordinal) {
+  // let value = rand.random();
+  // if (value < 0.333) {
+  //   return patternLoop();
+  // } else {
+  //   return patternBend();
+  // }
+  if (ordinal & 1) {
     return patternBend();
+  } else {
+    return patternLoop();
   }
 }
 
@@ -407,9 +415,9 @@ function patternFits(state, pattern, pat_x, pat_y) {
 }
 
 function gameStateAddRoad(state) {
-  let { w, h } = state;
+  let { w, h, num_roads } = state;
   for (let iter = 0; iter < 10000; ++iter) {
-    let pattern = randomRoadPattern();
+    let pattern = randomRoadPattern(num_roads);
 
     let edge = rand.range(4);
     let x = edge === 0 ? 1 : edge === 2 ? w - pattern.w - 1 :
