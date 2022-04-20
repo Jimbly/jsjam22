@@ -101,6 +101,7 @@ export let light_dir_ws = vec3(-1, -2, -3);
 export let font;
 export let app_state = null;
 export const border_color = vec4(0, 0, 0, 1);
+export let border_clear_color = vec4(0, 0, 0, 1);
 
 let no_render = false;
 
@@ -858,7 +859,6 @@ function tick(timestamp) {
 
   if (render_width) {
     effectsPassConsume();
-    let clear_color = [0, 0, 0, 1];
     let final_viewport = [
       camera2d.render_offset_x, camera2d.render_offset_y_bottom,
       camera2d.render_viewport_w, camera2d.render_viewport_h
@@ -866,7 +866,7 @@ function tick(timestamp) {
     let params = {
       clear: true,
       clear_all: true,
-      clear_color: clear_color,
+      clear_color: border_clear_color,
       viewport: final_viewport,
     };
     if (do_viewport_postprocess) {

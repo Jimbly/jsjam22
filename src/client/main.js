@@ -18,10 +18,11 @@ const { scrollAreaCreate } = require('glov/client/scroll_area.js');
 const settings = require('glov/client/settings.js');
 const { createSprite } = require('glov/client/sprites.js');
 const { createSpriteAnimation } = require('glov/client/sprite_animation.js');
+const transition = require('glov/client/transition.js');
 const ui = require('glov/client/ui.js');
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const { clamp, clone, lerp, easeInOut, easeIn, easeOut, ridx } = require('glov/common/util.js');
-const { vec2, vec4, v4set } = require('glov/common/vmath.js');
+const { vec2, vec4, v4copy, v4set } = require('glov/common/vmath.js');
 
 window.Z = window.Z || {};
 Z.BACKGROUND = 1;
@@ -1204,6 +1205,7 @@ function drawBoard(x0, y0, w, h) {
     saveGame();
     // eslint-disable-next-line no-use-before-define
     engine.setState(stateMenu);
+    transition.queue(Z.TRANSITION_FINAL, transition.pixelate(500));
   }
 
   // Show time
@@ -1563,6 +1565,7 @@ function tickState() {
 }
 
 function statePlay(dt) {
+  v4copy(engine.border_clear_color, pico8.colors[0]);
   gl.clearColor(...pico8.colors[0]);
 
   if (fast_forward) {
@@ -1583,6 +1586,7 @@ function statePlay(dt) {
 
 let cow_rot = 0;
 function stateMenu() {
+  v4copy(engine.border_clear_color, pico8.colors[11]);
   gl.clearColor(...pico8.colors[11]);
 
   sprites.title_text.draw({ x: 0, y: 0, w: game_width, h: game_height, z: Z.BACKGROUND });
@@ -1630,6 +1634,7 @@ function stateMenu() {
     })) {
       loadGame();
       engine.setState(statePlay);
+      transition.queue(Z.TRANSITION_FINAL, transition.pixelate(500));
     }
     x += button_w + pad;
   }
@@ -1644,6 +1649,7 @@ function stateMenu() {
       game_state = gameStateCreate(INITIAL_GAME_SEED);
     }
     engine.setState(statePlay);
+    transition.queue(Z.TRANSITION_FINAL, transition.pixelate(500));
   }
   x += button_w + pad;
 
