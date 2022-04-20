@@ -34,6 +34,7 @@ Z.FLOATERS = 200;
 const game_width = 640;
 const game_height = 384;
 let font;
+let title_font;
 
 let auto_load = true;
 
@@ -903,13 +904,14 @@ function drawShop(x0, y0, w, h) {
         x: xx,
         y,
         w: COST_W,
-        align: font.ALIGN.HRIGHT | font.ALIGN.HFIT,
+        h: button_h,
+        align: font.ALIGN.HRIGHT | font.ALIGN.HFIT | font.ALIGN.VCENTER,
         text: `${have}/${need}`,
       });
       xx += COST_W + 2;
       sprites.tiles.draw({
         x: xx,
-        y,
+        y: y + (BUTTON_H - TILE_SIZE) / 2,
         frame: RESOURCE_FRAMES[key],
       });
       xx += TILE_SIZE;
@@ -1499,23 +1501,22 @@ export function main() {
     net.init({ engine });
   }
 
-  const font_info_04b03x2 = require('./img/font/04b03_8x2.json');
-  const font_info_04b03x1 = require('./img/font/04b03_8x1.json');
-  const font_info_palanquin32 = require('./img/font/palanquin32.json');
   let pixely = 'strict';
-  if (pixely === 'strict') {
-    font = { info: font_info_04b03x1, texture: 'font/04b03_8x1' };
-  } else if (pixely && pixely !== 'off') {
-    font = { info: font_info_04b03x2, texture: 'font/04b03_8x2' };
-  } else {
-    font = { info: font_info_palanquin32, texture: 'font/palanquin32' };
-  }
+  //font = { info: require('./img/font/04b03_8x2.json'), texture: 'font/04b03_8x2', h: 8 }; // for pixely='on'
+  //font = { info: require('./img/font/palanquin32.json'), texture: 'font/palanquin32', h: 16 };
+  //font = { info: require('./img/font/sperry_8x16x1.json'), texture: 'font/sperry_8x16x1', h: 19 };
+  // best options:
+  title_font = { info: require('./img/font/vga_8x16x1.json'), texture: 'font/vga_8x16x1', h: 16 };
+  //font = { info: require('./img/font/vga_8x16x1.json'), texture: 'font/vga_8x16x1', h: 16 };
+  font = { info: require('./img/font/04b03_8x1.json'), texture: 'font/04b03_8x1', h: 8 };
+  //font = { info: require('./img/font/04b03_8x1.json'), texture: 'font/04b03_8x1', h: 16 };
 
   if (!engine.startup({
     game_width,
     game_height,
     pixely,
     font,
+    title_font,
     viewport_postprocess: false,
     antialias: false,
     do_borders: true,
@@ -1528,10 +1529,10 @@ export function main() {
   })) {
     return;
   }
-  font = engine.font;
 
   ui.scaleSizes(22 / 32);
-  ui.setFontHeight(16);
+  ui.setFontHeight(font.h);
+  ({ font, title_font } = engine);
 
   particles = engine.glov_particles;
   init();
