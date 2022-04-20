@@ -17,7 +17,7 @@ const { createSprite } = require('glov/client/sprites.js');
 const { createSpriteAnimation } = require('glov/client/sprite_animation.js');
 const ui = require('glov/client/ui.js');
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-const { clone, lerp, easeInOut, easeIn, easeOut, ridx } = require('glov/common/util.js');
+const { clamp, clone, lerp, easeInOut, easeIn, easeOut, ridx } = require('glov/common/util.js');
 const { vec2, vec4 } = require('glov/common/vmath.js');
 
 window.Z = window.Z || {};
@@ -173,24 +173,66 @@ function patternBend() {
   return ret;
 }
 
+const ROAD_ADD_FADE_TIME = 300;
+const ROAD_ADD_FADE_DELTA = 66;
+const WORKER_FADE = 750;
 function gameStateAddPattern(state, pattern, x, y) {
-  let { board, workers } = state;
+  let { board, workers, w } = state;
   let locations = [];
+  let fill_start;
   for (let yy = 0; yy < pattern.length; ++yy) {
     let row = pattern[yy];
     for (let xx = 0; xx < row.length; ++xx) {
       if (row[xx]) {
+        let loc = [x+xx, y+yy];
+        if (!fill_start) {
+          fill_start = loc;
+        }
         let cell = board[y + yy][x + xx];
         assert(cell.type === TYPE_EMPTY || cell.type === TYPE_DETAIL);
         cell.type = TYPE_ROAD;
-        locations.push([x+xx, y+yy]);
+        locations.push(loc);
       }
     }
   }
+
+  // Flood-fill road
+  let countdown = ROAD_ADD_FADE_TIME;
+  let seen = {};
+  let to_search = [];
+  function fillRoad(xx, yy) {
+    let idx = xx + yy * w;
+    if (seen[idx]) {
+      return;
+    }
+    seen[idx] = true;
+    let pair = [xx, yy];
+    to_search.push(pair);
+  }
+  fillRoad(fill_start[0], fill_start[1]);
+  while (to_search.length) {
+    let pos = to_search.pop();
+    ([x, y] = pos);
+    board[y][x].road_fade = countdown;
+    countdown += ROAD_ADD_FADE_DELTA;
+    for (let ii = 0; ii < DX.length; ++ii) {
+      let x2 = x + DX[ii];
+      let y2 = y + DY[ii];
+      let cell = board[y2]?.[x2];
+      if (!cell) {
+        continue;
+      }
+      if (cell.type === TYPE_ROAD) {
+        fillRoad(x2, y2);
+      }
+    }
+  }
+
   let worker_pos = locations[rand.range(locations.length)];
   workers.push({
     x: worker_pos[0], y: worker_pos[1],
     dir: rand.range(4),
+    worker_fade: WORKER_FADE,
   });
 }
 
@@ -430,11 +472,13 @@ function gameStateAddProgress(state) {
               // he's moving onto us, move the opposite of his movement
               workers.push({
                 x: x2, y: y2, dir: (dd + 2) % 4,
+                worker_fade: WORKER_FADE,
               });
             } else {
               // he's moving away from us, move away from him
               workers.push({
                 x: x2, y: y2, dir: ii,
+                worker_fade: WORKER_FADE,
               });
             }
             break;
@@ -472,6 +516,13 @@ function init() {
     ws: [TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE],
     hs: [TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE],
     size: vec2(TILE_SIZE, TILE_SIZE),
+  });
+  sprites.tiles_centered = createSprite({
+    name: 'tiles',
+    ws: [TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE],
+    hs: [TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE],
+    size: vec2(TILE_SIZE, TILE_SIZE),
+    origin: vec2(0.5, 0.5),
   });
   sprites.tiles_2x = createSprite({
     name: 'tiles',
@@ -904,7 +955,9 @@ function clearCell(x, y, just_sell) {
   cell.type = TYPE_EMPTY;
 }
 
+let fade_color = vec4(1,1,1,1);
 function drawBoard(x0, y0, w, h) {
+  let dt = engine.frame_dt;
   ui.drawRect2({ x: x0, y: y0, w, h, color: pico8.colors[11], z: Z.BACKGROUND });
 
   camera2d.push();
@@ -961,7 +1014,17 @@ function drawBoard(x0, y0, w, h) {
       let cell = row[xx];
       let x = xx * TILE_SIZE;
       let y = yy * TILE_SIZE;
-      drawCell(cell, x, y);
+      fade_color[3] = 1;
+      if (cell.road_fade) {
+        if (dt >= cell.road_fade) {
+          delete cell.road_fade;
+        } else {
+          cell.road_fade -= dt;
+          let alpha = easeInOut(clamp(1 - cell.road_fade / ROAD_ADD_FADE_TIME, 0, 1), 2);
+          fade_color[3] = alpha;
+        }
+      }
+      drawCell(cell, x, y, Z.BOARD, fade_color);
       let size = TYPE_SIZE[cell.type] || 1;
       let click_param = {
         x, y, w: TILE_SIZE * size, h: TILE_SIZE * size,
@@ -974,6 +1037,7 @@ function drawBoard(x0, y0, w, h) {
           game_state.workers.push({
             x: xx, y: yy,
             dir: rand.range(4),
+            worker_fade: WORKER_FADE,
           });
         } else {
           clearCell(xx, yy);
@@ -1030,7 +1094,14 @@ function drawBoard(x0, y0, w, h) {
   // draw workers
   for (let ii = 0; ii < workers.length; ++ii) {
     let worker = workers[ii];
-    let { x, y, lastx, lasty } = worker;
+    if (worker.worker_fade) {
+      if (dt >= worker.worker_fade) {
+        delete worker.worker_fade;
+      } else {
+        worker.worker_fade -= dt;
+      }
+    }
+    let { x, y, lastx, lasty, worker_fade } = worker;
     if (lastx !== undefined && a < 1) {
       x = lerp(ainout, lastx, x);
       y = lerp(ainout, lasty, y) + sin(ainout * PI) * -0.5;
@@ -1041,9 +1112,18 @@ function drawBoard(x0, y0, w, h) {
       worker.anim = createSpriteAnimation(ANIMDATA_WORKER);
       worker.anim.setState('idle');
     }
-    sprites.tiles.draw({
-      x, y, z: Z.WORKERS,
-      frame: worker.anim.getFrame(engine.frame_dt),
+    fade_color[3] = 1;
+    let scale = 1;
+    if (worker_fade) {
+      let alpha = 1 - worker_fade / WORKER_FADE;
+      fade_color[3] = easeInOut(alpha, 2);
+      scale = 1 + (1 - easeOut(alpha, 3)) * 4;
+    }
+    sprites.tiles_centered.draw({
+      x: x + TILE_SIZE/2, y: y + TILE_SIZE/2, z: Z.WORKERS,
+      w: scale, h: scale,
+      frame: worker.anim.getFrame(dt),
+      color: fade_color,
     });
     drawCarried(worker, x, y, CARRY_OFFSET_SOURCE_SINK, CARRY_OFFSET_WORKER);
     let click_param = {
@@ -1093,7 +1173,7 @@ function drawBoard(x0, y0, w, h) {
 
   updateFloaters();
 
-  particles.tick(engine.frame_dt);
+  particles.tick(dt);
 
   camera2d.pop();
 
