@@ -1,5 +1,7 @@
-Entry for Gamedev.js Jam 2022
-=============================
+Gamedev.js Jam 2022 - _RAW_
+============================
 
-* Main file: src/client/main.js
-* UI Examples: src/glov/client/ui_test.js
+Game jam entry by Jimbly and Benjaminsen - "Aaron's Quest IV: When Moses Was Away"
+
+* Play here: [http://www.dashingstrike.com/LudumDare/JS22/](dashingstrike.com/LudumDare/JS22/)
+* Using [Javascript libGlov/GLOV.js framework](https://github.com/Jimbly/glovjs)
