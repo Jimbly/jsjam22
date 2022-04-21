@@ -1721,16 +1721,23 @@ function tickState() {
     }
     if (!worker.resource) {
       // check for pickup
+      // first from crafting outputs
+      for (let jj = 0; !did_anything && jj < DX.length; ++jj) {
+        let nx = x + DX[jj];
+        let ny = y + DY[jj];
+        if (craftingOutputAt(nx, ny) && board[ny][nx].did_output_on !== num_ticks) {
+          worker.resource = craftingOutputAt(nx, ny);
+          delete board[ny][nx].resource;
+          worker.resource_from = jj;
+          did_anything = true;
+        }
+      }
+      // then from sources
       for (let jj = 0; !did_anything && jj < DX.length; ++jj) {
         let nx = x + DX[jj];
         let ny = y + DY[jj];
         if (typeAt(nx, ny) === TYPE_SOURCE) {
           worker.resource = board[ny][nx].resource;
-          worker.resource_from = jj;
-          did_anything = true;
-        } else if (craftingOutputAt(nx, ny) && board[ny][nx].did_output_on !== num_ticks) {
-          worker.resource = craftingOutputAt(nx, ny);
-          delete board[ny][nx].resource;
           worker.resource_from = jj;
           did_anything = true;
         }
