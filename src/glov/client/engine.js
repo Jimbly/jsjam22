@@ -42,7 +42,7 @@ const { perfCounterTick } = require('glov/common/perfcounters.js');
 const settings = require('./settings.js');
 const shaders = require('./shaders.js');
 const { shaderDebugUIStartup } = require('./shader_debug_ui.js');
-const { soundLoading, soundStartup, soundTick } = require('./sound.js');
+const { soundLoading, soundStartup, soundTick, soundPause, soundResume } = require('./sound.js');
 const sprites = require('./sprites.js');
 const textures = require('./textures.js');
 const { texturesTick } = textures;
@@ -692,6 +692,11 @@ function resetState() {
 
 export const hrnow = window.performance ? window.performance.now.bind(window.performance) : Date.now.bind(Date);
 
+let in_background = false;
+export function isInBackground() {
+  return in_background;
+}
+
 let last_tick = 0;
 function tick(timestamp) {
   frame_requested = false;
@@ -757,6 +762,8 @@ function tick(timestamp) {
     requestFrame();
     return;
   }
+  in_background = false;
+  soundResume();
 
   checkResize();
   had_3d_this_frame = false;
@@ -895,6 +902,12 @@ function tick(timestamp) {
 function periodiclyRequestFrame() {
   requestFrame();
   setTimeout(periodiclyRequestFrame, 5000);
+
+  let now = round(hrnow());
+  if (now - last_tick > 2000) {
+    in_background = true;
+    soundPause();
+  }
 }
 
 // Must be called out-of-frame (use setTimeout) if not at startup

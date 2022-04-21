@@ -2111,6 +2111,9 @@ function stateMenu() {
     no_bg: true,
   })) {
     settings.set('music', 1 - settings.get('music'));
+    if (settings.get('music')) {
+      soundPlayMusic('bg');
+    }
   }
   x += button_h + pad;
 }
@@ -2179,5 +2182,5 @@ export function main() {
   init();
 
   pumpMusic();
-  engine.setState(engine.DEBUG ? stateHighScores : stateMenu);
+  engine.setState(engine.DEBUG ? statePlay : stateMenu);
 }

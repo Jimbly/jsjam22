@@ -274,6 +274,10 @@ export function soundPause(): void {
   soundTick(0); // eslint-disable-line no-use-before-define
 }
 
+export function soundPauseSmooth(): void {
+  volume_override_target = 0;
+}
+
 export function soundResume(): void {
   volume_override_target = 1;
 
