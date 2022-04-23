@@ -37,7 +37,7 @@ Z.PARTICLES = 150;
 Z.FLOATERS = 200;
 
 // Virtual viewport for our game logic
-const game_width = 640; // - 12;
+const game_width = 640 - 12;
 const game_height = 384;
 let font;
 let title_font;
@@ -48,7 +48,7 @@ let fast_forward = false;
 let sprites = {};
 let particles;
 
-const DEBUGUI = engine.DEBUG;
+const DEBUGUI = engine.DEBUG && false;
 
 const TILE_SIZE = 16;
 const CARRY_OFFSET_SOURCE_SINK = 1;
@@ -2223,7 +2223,7 @@ function stateMenu() {
 
   let color = transitioner.getFadeColor('title');
   if (color) {
-    sprites.title_text.draw({ x: 0, y: 0, w: game_width, h: game_height, z: Z.BACKGROUND, color });
+    sprites.title_text.draw({ x: -6, y: 0, w: game_width, h: game_height, z: Z.BACKGROUND, color });
   }
 
   const CREDITS_SIZE = 16;
