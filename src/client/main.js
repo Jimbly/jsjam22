@@ -8,7 +8,7 @@ const engine = require('glov/client/engine.js');
 const { style, styleColored } = require('glov/client/font.js');
 const input = require('glov/client/input.js');
 const { KEYS } = input;
-const { floor, max, sin, random, PI } = Math;
+const { abs, floor, max, sin, random, round, PI } = Math;
 const net = require('glov/client/net.js');
 const particle_data = require('./particle_data.js');
 const { preloadParticleData } = require('glov/client/particles.js');
@@ -1510,7 +1510,11 @@ function drawBoard(x0, y0, w, h) {
         x, y, w: TILE_SIZE * size, h: TILE_SIZE * size,
       };
       if (cell.type !== TYPE_SOURCE) {
-        drawCarried(cell, x, y, CARRY_OFFSET_WORKER, CARRY_OFFSET_SOURCE_SINK,
+        let offs = CARRY_OFFSET_SOURCE_SINK;
+        if (craftingOutputAt(xx, yy)) {
+          offs += round(abs(sin(engine.frame_timestamp * 0.004) * 4));
+        }
+        drawCarried(cell, x, y, CARRY_OFFSET_WORKER, offs,
           cell.type === TYPE_SINK || cell.type === TYPE_CRAFT || cell.type === TYPE_EMPTY);
       }
       if (cursor && canPlace(cursor.cell, xx, yy) && input.click({ ...click_param, button: 0, max_dist: Infinity })) {
