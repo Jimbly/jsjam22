@@ -8,7 +8,7 @@ const engine = require('glov/client/engine.js');
 const { style, styleColored } = require('glov/client/font.js');
 const input = require('glov/client/input.js');
 const { KEYS } = input;
-const { abs, floor, max, sin, random, round, PI } = Math;
+const { abs, ceil, floor, max, sin, random, round, PI } = Math;
 const net = require('glov/client/net.js');
 const particle_data = require('./particle_data.js');
 const { preloadParticleData } = require('glov/client/particles.js');
@@ -31,6 +31,7 @@ window.Z = window.Z || {};
 Z.BACKGROUND = 1;
 Z.BOARD = 10;
 Z.WORKERS = 20;
+Z.HELP = 40;
 Z.UI = 100;
 Z.PARTICLES = 150;
 Z.FLOATERS = 200;
@@ -46,6 +47,8 @@ let fast_forward = false;
 
 let sprites = {};
 let particles;
+
+const DEBUGUI = engine.DEBUG;
 
 const TILE_SIZE = 16;
 const CARRY_OFFSET_SOURCE_SINK = 1;
@@ -1064,7 +1067,7 @@ function drawShop(x0, y0, w, h) {
   ui.drawRect2({ x, y, w, h, color: pico8.colors[15], z: Z.UI - 1 });
   scroll_area.begin({
     x, y, w,
-    h: h - (engine.DEBUG ? ui.button_height * 3 : 0),
+    h: h - (DEBUGUI ? ui.button_height * 3 : 0),
     z: Z.UI,
   });
   x = y = 0;
@@ -1075,7 +1078,7 @@ function drawShop(x0, y0, w, h) {
   let { resources } = game_state;
   for (let ii = 0; ii < SHOP.length; ++ii) {
     let elem = SHOP[ii % SHOP.length];
-    if (elem.debug && !engine.DEBUG) {
+    if (elem.debug && !DEBUGUI) {
       continue;
     }
     let { cost } = elem;
@@ -1176,7 +1179,7 @@ function drawShop(x0, y0, w, h) {
     refundCursor();
   }
 
-  if (engine.DEBUG) {
+  if (DEBUGUI) {
     if (ui.buttonText({ x, y: y0 + h - ui.button_height * 2 - PAD, w: w/3, text: '+Prog', colors: colors_debug })) {
       gameStateAddProgress(game_state);
     }
@@ -1195,7 +1198,7 @@ function drawShop(x0, y0, w, h) {
     }
   }
   if (auto_load ||
-    engine.DEBUG &&
+    DEBUGUI &&
     ui.buttonText({ x: x + w*2/3, y: y0 + h - ui.button_height, w: w/3, text: 'Load', colors: colors_debug })
   ) {
     auto_load = false;
@@ -1371,6 +1374,120 @@ function timeFormat(ticks) {
   let m = floor(s/60);
   s %= 60;
   return `${m}:${pad2(s)}`;
+}
+
+const style_help = style(null, {
+  color: pico8.font_colors[0],
+});
+
+function drawTutorial(x0, y0, w, h) {
+  let text = '';
+  let { ever_output, board, workers, cursor, resources } = game_state;
+
+  let carrying = {};
+  for (let ii = 0; ii < workers.length; ++ii) {
+    let worker = workers[ii];
+    carrying[worker.resource] = true;
+  }
+  let sources = {};
+  let tiles = {};
+  let crafting = {};
+  for (let yy = 0; yy < board.length; ++yy) {
+    let row = board[yy];
+    for (let xx = 0; xx < row.length; ++xx) {
+      let cell = row[xx];
+      if (cell.type === TYPE_SOURCE) {
+        sources[cell.resource] = true;
+      } else if (cell.type === TYPE_CRAFT || cell.type === TYPE_EMPTY) {
+        crafting[cell.resource] = true;
+      } else if (cell.type === TYPE_SINK) {
+        carrying[cell.resource] = true;
+      }
+      tiles[cell.type] = true;
+    }
+  }
+
+  let Click = input.touch_mode ? 'Tap' : 'Click';
+  let rightclick = input.touch_mode ? 'long-press' : 'right-click';
+
+  if (!ever_output[RESOURCE_WOOD]) {
+    // phase 1: need to sell some wood
+    if (!sources[RESOURCE_WOOD]) {
+      if (!cursor) {
+        text = `HINT: ${Click} the Tree button in the shop to start placing a source of raw wood.`;
+      } else {
+        text = `HINT: ${Click} next to a path to place it where a worker can gather from it.`;
+      }
+    }
+    if (!tiles[TYPE_SINK]) {
+      text = 'HINT: Re-build a market next to the path to continue.';
+    }
+  }
+  if (!text && !ever_output[RESOURCE_METAL] && !sources[RESOURCE_METAL]) {
+    // phase 2: metal mine and sell metal
+    if (!tiles[TYPE_SINK]) {
+      text = 'HINT: Re-build a market next to the path to continue.';
+    } else if ((resources[RESOURCE_WOOD] || 0) < 3 &&
+      (!cursor || cursor.cell.type !== TYPE_SOURCE || cursor.cell.resource !== RESOURCE_METAL)
+    ) {
+      text = 'Workers automatically pick up and drop off resources.\nWait until your workers have sold 3 wood.' +
+        '\nHINT: You can use the Fast-Forward button in the upper right if desired.' +
+        `\nHINT: If you ${rightclick} a structure you can pick it up to move or sell.`;
+    } else {
+      text = 'Place some raw metal for your workers to gather.';
+    }
+  }
+  if (!text && !ever_output[RESOURCE_FIRE] && !tiles[TYPE_CRAFT]) {
+    // want to spend 3 metal to make a fire crafter
+    if ((resources[RESOURCE_METAL] || 0) < 3 && (!cursor || cursor.cell.type !== TYPE_CRAFT)) {
+      text = 'Wait until your workers have sold 3 metal.' +
+        `\nHINT: You may want to move structures with ${rightclick}, or place an additional market.` +
+        '\nHINT: Every time a worker sells a new resource for the first time, you gain an additional worker.' +
+        '\nHINT: Every-other time you also gain an additional path.';
+    } else {
+      text = 'Next, place a fire maker.' +
+        '\nIMPORTANT: Workers must be able to get to both the 2 inputs and the 1 output.' +
+        '\nHINT: Place it in the center of a loop, or between two paths.';
+    }
+  }
+  if (!text && !ever_output[RESOURCE_FIRE]) {
+    // final phase: sell some fire
+    if (!carrying[RESOURCE_FIRE] && !crafting[RESOURCE_FIRE] &&
+      (!crafting[RESOURCE_WOOD] || !crafting[RESOURCE_METAL])
+    ) {
+      text = 'Have your workers load wood and metal into the fire maker.' +
+        `\nHINT: ${Click} the fire maker to rotate it.` +
+        `\nHINT: You may want to move structures with ${rightclick}, or place additional resources.`;
+    }
+  }
+  if (!text && !ever_output[RESOURCE_WATER] && !sources[RESOURCE_WATER] && (resources[RESOURCE_FIRE] || 0) < 3) {
+    // has fire, or will next tick
+    // if (!ever_output[RESOURCE_FIRE] && !carrying[RESOURCE_FIRE]) {
+    text = 'Next up: sell 3 fire!' +
+      '\nHINT: A worker must pick up the fire and deliver it to a market to sell.' +
+      `\nHINT: ${Click} the fire maker to rotate it.` +
+      `\nHINT: You may want to move structures with ${rightclick}, or place additional resources and markets.`;
+  }
+  if (text) {
+    let z = Z.HELP;
+    const PAD = 36;
+    let x = x0 + PAD;
+    let text_draw_w = w - PAD*2;
+    let num_lines = font.numLines(style_help, text_draw_w, 0, ui.font_height, text);
+    let y = y0 + h - 12 - (num_lines - 1) * ui.font_height;
+    font.draw({
+      x, y, w: text_draw_w,
+      align: font.ALIGN.HCENTER | font.ALIGN.HWRAP,
+      text,
+      style: style_help,
+    });
+    text_draw_w += 8;
+    ui.panel({
+      x: x0 + (w - text_draw_w)/2,
+      y: y - 4, z,
+      w: text_draw_w, h: 24 + ui.font_height * num_lines,
+    });
+  }
 }
 
 let fade_color = vec4(1,1,1,1);
@@ -1709,6 +1826,8 @@ function drawBoard(x0, y0, w, h) {
       }
     }
   }
+
+  drawTutorial(x0, y0, w, h);
 }
 
 function getQuadCell(x, y, quad) {
