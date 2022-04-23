@@ -100,7 +100,7 @@ const ANIMDATA_DETAIL = [
   },
   {
     idle: {
-      frames: [44,45],
+      frames: [3,11],
       times: [500, 500],
       times_random: [400, 400],
     },
@@ -114,6 +114,25 @@ const ANIMDATA_WORKER = {
     times_random: [5000, 100],
   },
 };
+
+const ANIMDATA_SOURCE = {
+  water: {
+    frames: [48, 49, 50, 51, 52, 53, 54, 55],
+    times: 250,
+    times_random: 100,
+  },
+  wood: {
+    frames: [56, 57, 58, 59, 60, 61, 62, 63],
+    times: 250,
+    times_random: 100,
+  },
+  metal: {
+    frames: [36, 37, 38, 39, 44, 45, 46, 47],
+    times: [500, 100, 100, 100, 500, 100, 100, 100],
+    times_random: [500, 0, 0, 0, 500, 0, 0, 0],
+  },
+};
+
 
 const TYPE_ROTATABLE = {
   [TYPE_CRAFT]: true,
@@ -446,7 +465,7 @@ const BOUNCE_ORDER = [0, 1, 3, 2];
 
 function gameToJson(state) {
   let ret = clone(state);
-  let { board, workers } = ret;
+  let { board, workers, cursor } = ret;
   for (let yy = 0; yy < board.length; ++yy) {
     let row = board[yy];
     for (let xx = 0; xx < row.length; ++xx) {
@@ -456,6 +475,9 @@ function gameToJson(state) {
   }
   for (let ii = 0; ii < workers.length; ++ii) {
     delete workers[ii].anim;
+  }
+  if (cursor) {
+    delete cursor.cell.anim;
   }
   ret.seed = rand.exportState();
   return ret;
@@ -685,9 +707,9 @@ function getCellFrame(cell, x, y, z) {
         } else if (up) {
           frame = 43;
         } else if (right) {
-          frame = 36;
+          frame = 14;
         } else if (left) {
-          frame = 37;
+          frame = 15;
         }
       }
       break;
@@ -702,16 +724,28 @@ function getCellFrame(cell, x, y, z) {
     case TYPE_SOURCE:
       switch (cell.resource) {
         case RESOURCE_WOOD:
-          frame = 1;
+          if (!cell.anim) {
+            cell.anim = createSpriteAnimation(ANIMDATA_SOURCE);
+            cell.anim.setState('wood');
+            cell.anim.update(floor(random() * 1000));
+          }
+          frame = cell.anim.getFrame(engine.frame_dt);
           break;
-        // case RESOURCE_BERRY:
-        //   frame = 3;
-        //   break;
         case RESOURCE_WATER:
-          frame = 18;
+          if (!cell.anim) {
+            cell.anim = createSpriteAnimation(ANIMDATA_SOURCE);
+            cell.anim.setState('water');
+            cell.anim.update(floor(random() * 1000));
+          }
+          frame = cell.anim.getFrame(engine.frame_dt);
           break;
         case RESOURCE_METAL:
-          frame = 26;
+          if (!cell.anim) {
+            cell.anim = createSpriteAnimation(ANIMDATA_SOURCE);
+            cell.anim.setState('metal');
+            cell.anim.update(floor(random() * 1000));
+          }
+          frame = cell.anim.getFrame(engine.frame_dt);
           break;
         default:
           assert(0);
@@ -1128,6 +1162,7 @@ function drawShop(x0, y0, w, h) {
       refundCursor();
       if (!same) {
         game_state.cursor = clone(elem);
+        delete game_state.cursor.cell.anim;
         payCost(elem);
       }
     }
@@ -1506,6 +1541,7 @@ function drawBoard(x0, y0, w, h) {
         cursor = game_state.cursor = {
           cell: clone(cell),
         };
+        delete game_state.cursor.cell.anim;
         if (cursor.cell.type !== TYPE_SOURCE) {
           delete cursor.cell.resource;
         }
