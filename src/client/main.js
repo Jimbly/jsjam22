@@ -5,10 +5,10 @@ local_storage.setStoragePrefix('jsjam22'); // Before requiring anything else tha
 const assert = require('assert');
 const camera2d = require('glov/client/camera2d.js');
 const engine = require('glov/client/engine.js');
-const { style, styleColored } = require('glov/client/font.js');
+const { style, styleAlpha, styleColored } = require('glov/client/font.js');
 const input = require('glov/client/input.js');
 const { KEYS } = input;
-const { abs, ceil, floor, max, sin, random, round, PI } = Math;
+const { abs, floor, max, sin, random, round, PI } = Math;
 const net = require('glov/client/net.js');
 const particle_data = require('./particle_data.js');
 const { preloadParticleData } = require('glov/client/particles.js');
@@ -1380,6 +1380,8 @@ const style_help = style(null, {
   color: pico8.font_colors[0],
 });
 
+let tut_stack = [];
+let tut_completed_at = 0;
 function drawTutorial(x0, y0, w, h) {
   let text = '';
   let { ever_output, board, workers, cursor, resources } = game_state;
@@ -1414,9 +1416,9 @@ function drawTutorial(x0, y0, w, h) {
     // phase 1: need to sell some wood
     if (!sources[RESOURCE_WOOD]) {
       if (!cursor) {
-        text = `HINT: ${Click} the Tree button in the shop to start placing a source of raw wood.`;
+        text = 'HINT: Select the Tree on the left to start placing a source of raw wood.';
       } else {
-        text = `HINT: ${Click} next to a path to place it where a worker can gather from it.`;
+        text = `${Click} next to a path to place it where a worker can gather from it.`;
       }
     }
     if (!tiles[TYPE_SINK]) {
@@ -1468,25 +1470,78 @@ function drawTutorial(x0, y0, w, h) {
       `\nHINT: ${Click} the fire maker to rotate it.` +
       `\nHINT: You may want to move structures with ${rightclick}, or place additional resources and markets.`;
   }
-  if (text) {
-    let z = Z.HELP;
+
+  if (!text && !tut_completed_at && !game_state.tut_completed) {
+    tut_completed_at = engine.frame_timestamp;
+    game_state.tut_completed = true;
+  }
+  if (!text && tut_completed_at && engine.frame_timestamp - tut_completed_at < 10000) {
+    text = 'Great job!\nYou\'re on your own from here, go make something that will make your people proud!';
+  }
+
+  if (!tut_stack.length || tut_stack[tut_stack.length-1].text !== text) {
+    tut_stack.push({
+      start_time: engine.frame_timestamp,
+      text,
+    });
+  }
+  tut_stack[tut_stack.length-1].end_time = engine.frame_timestamp;
+
+  // eslint-disable-next-line @typescript-eslint/no-shadow
+  function drawTutText(text, alpha, z) {
     const PAD = 36;
     let x = x0 + PAD;
     let text_draw_w = w - PAD*2;
     let num_lines = font.numLines(style_help, text_draw_w, 0, ui.font_height, text);
     let y = y0 + h - 12 - (num_lines - 1) * ui.font_height;
+    let maxy = y0 + h;
+    y = lerp(easeOut(alpha, 2), maxy, y);
+    let panel_w = text_draw_w + 8;
+    let panel_param = {
+      x: x0 + (w - panel_w)/2,
+      y: y - 4, z,
+      w: panel_w, h: y0 + h - y + 3 + 4,
+      eat_clicks: false,
+      peek: true,
+    };
+    let use_style = style_help;
+    if (input.mouseOver(panel_param)) {
+      panel_param.color = [1,1,1, 0.5];
+      use_style = styleAlpha(use_style, 0.5);
+    }
     font.draw({
-      x, y, w: text_draw_w,
+      x, y, z, w: text_draw_w,
       align: font.ALIGN.HCENTER | font.ALIGN.HWRAP,
       text,
-      style: style_help,
+      style: use_style,
     });
-    text_draw_w += 8;
-    ui.panel({
-      x: x0 + (w - text_draw_w)/2,
-      y: y - 4, z,
-      w: text_draw_w, h: 24 + ui.font_height * num_lines,
-    });
+    ui.panel(panel_param);
+  }
+  const TUT_FADE = 1000;
+  let z = Z.HELP + 3;
+  for (let ii = tut_stack.length - 1; ii >= 0; --ii) {
+    let ts = tut_stack[ii];
+    let alpha;
+    if (ii === tut_stack.length - 1) {
+      // fading in
+      let dt = engine.frame_timestamp - ts.start_time;
+      alpha = clamp(dt / TUT_FADE, 0, 1);
+      if (ts.text) {
+        drawTutText(ts.text, alpha, z);
+      }
+    } else {
+      // fading out
+      let dt = engine.frame_timestamp - ts.end_time;
+      alpha = 1 - dt / TUT_FADE;
+      if (alpha <= 0) {
+        tut_stack.splice(ii, 1);
+        continue;
+      }
+      if (ts.text) {
+        drawTutText(ts.text, alpha, z);
+      }
+    }
+    z -= 3;
   }
 }
 
@@ -1495,6 +1550,8 @@ let shadow_color = vec4(1,1,1,0.5);
 function drawBoard(x0, y0, w, h) {
   let dt = engine.frame_dt;
   ui.drawRect2({ x: x0, y: y0, w, h, color: pico8.colors[11], z: Z.BACKGROUND });
+
+  drawTutorial(x0, y0, w, h);
 
   const FF_BUTTON_SIZE = ui.button_height;
   if (ui.button({
@@ -1827,7 +1884,6 @@ function drawBoard(x0, y0, w, h) {
     }
   }
 
-  drawTutorial(x0, y0, w, h);
 }
 
 function getQuadCell(x, y, quad) {
