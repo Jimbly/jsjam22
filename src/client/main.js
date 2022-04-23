@@ -1510,7 +1510,8 @@ function drawBoard(x0, y0, w, h) {
         x, y, w: TILE_SIZE * size, h: TILE_SIZE * size,
       };
       if (cell.type !== TYPE_SOURCE) {
-        drawCarried(cell, x, y, CARRY_OFFSET_WORKER, CARRY_OFFSET_SOURCE_SINK, cell.type === TYPE_SINK);
+        drawCarried(cell, x, y, CARRY_OFFSET_WORKER, CARRY_OFFSET_SOURCE_SINK,
+          cell.type === TYPE_SINK || cell.type === TYPE_CRAFT || cell.type === TYPE_EMPTY);
       }
       if (cursor && canPlace(cursor.cell, xx, yy) && input.click({ ...click_param, button: 0, max_dist: Infinity })) {
         ui.playUISound('place');
