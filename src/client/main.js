@@ -1943,6 +1943,8 @@ function tickState() {
           delete input1.resource;
           particles.createSystem(particle_data.defs.explosion, [(xx + 1)*TILE_SIZE, (yy + 1)*TILE_SIZE, Z.PARTICLES]);
           ui.playUISound('craft');
+          input0.did_output_on = num_ticks;
+          input1.did_output_on = num_ticks;
           output.did_output_on = num_ticks;
         }
       }
@@ -1989,7 +1991,7 @@ function tickState() {
       for (let jj = 0; !did_anything && jj < DX.length; ++jj) {
         let nx = x + DX[jj];
         let ny = y + DY[jj];
-        if (craftingInputAt(nx, ny, worker.resource)) {
+        if (craftingInputAt(nx, ny, worker.resource) && board[ny][nx].did_output_on !== num_ticks) {
           let target_cell = board[ny][nx];
           if (!target_cell.resource) {
             target_cell.resource = worker.resource;
