@@ -1938,12 +1938,12 @@ function tickState() {
         if (!output.resource && input0.resource && input1.resource) {
           // do it
           output.resource = cell.output;
-          output.resource_from =
+          delete output.resource_from;
           delete input0.resource;
           delete input1.resource;
           particles.createSystem(particle_data.defs.explosion, [(xx + 1)*TILE_SIZE, (yy + 1)*TILE_SIZE, Z.PARTICLES]);
           ui.playUISound('craft');
-          cell.did_output_on = num_ticks;
+          output.did_output_on = num_ticks;
         }
       }
     }
