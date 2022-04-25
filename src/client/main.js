@@ -8,7 +8,7 @@ const engine = require('glov/client/engine.js');
 const { style, styleAlpha, styleColored } = require('glov/client/font.js');
 const input = require('glov/client/input.js');
 const { KEYS } = input;
-const { abs, floor, max, sin, random, round, PI } = Math;
+const { abs, floor, max, min, sin, random, round, PI } = Math;
 const net = require('glov/client/net.js');
 const particle_data = require('./particle_data.js');
 const { preloadParticleData } = require('glov/client/particles.js');
@@ -43,7 +43,10 @@ let font;
 let title_font;
 
 let auto_load = true;
-let fast_forward = false;
+const SPEED_PAUSE = 0;
+const SPEED_PLAY = 1;
+const SPEED_FF = 5;
+let speed = SPEED_PLAY;
 
 let sprites = {};
 let particles;
@@ -1559,15 +1562,36 @@ function drawBoard(x0, y0, w, h) {
     y: y0,
     w: FF_BUTTON_SIZE, h: FF_BUTTON_SIZE,
     img: sprites.tiles_ui,
-    frame: fast_forward ? 9 : 8,
-    tooltip: 'Toggle [F]ast-forward',
+    frame: speed === SPEED_FF ? 9 : speed === SPEED_PAUSE ? 13 : 8,
+    tooltip: 'Toggle [F]ast-forward\n' +
+      `${input.touch_mode ? '[Double-tap]' : '[Space] or [Double-click]'} to pause`,
     no_bg: true,
   })) {
-    fast_forward = !fast_forward;
+    if (speed !== SPEED_PAUSE && ui.button_click.was_double_click) {
+      speed = SPEED_PAUSE;
+    } else {
+      if (speed !== SPEED_PLAY) {
+        speed = SPEED_PLAY;
+      } else {
+        speed = SPEED_FF;
+      }
+    }
   }
   if (input.keyUpEdge(KEYS.F)) {
     ui.playUISound('button_click');
-    fast_forward = !fast_forward;
+    if (speed !== SPEED_PLAY) {
+      speed = SPEED_PLAY;
+    } else {
+      speed = SPEED_FF;
+    }
+  }
+  if (input.keyUpEdge(KEYS.SPACE)) {
+    ui.playUISound('button_click');
+    if (speed !== SPEED_PLAY) {
+      speed = SPEED_PLAY;
+    } else {
+      speed = SPEED_PAUSE;
+    }
   }
   if (ui.button({
     x: x0 + w - FF_BUTTON_SIZE*2 - 4,
@@ -2012,8 +2036,10 @@ function statePlay(dt) {
   v4copy(engine.border_clear_color, pico8.colors[0]);
   gl.clearColor(...pico8.colors[0]);
 
-  if (fast_forward) {
-    dt *= 5;
+  if (!speed && game_state.tick_countdown > 1) {
+    dt = min(dt, game_state.tick_countdown - 1);
+  } else {
+    dt *= speed;
   }
   if (dt >= game_state.tick_countdown) {
     game_state.tick_countdown = max(TICK_TIME/2, TICK_TIME - (dt - game_state.tick_countdown));

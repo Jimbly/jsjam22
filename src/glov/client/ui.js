@@ -818,7 +818,7 @@ export function buttonShared(param) {
   }
   button_focused = focused;
   if (focused) {
-    if (glov_input.keyDownEdge(KEYS.SPACE, key_opts) || glov_input.keyDownEdge(KEYS.RETURN, key_opts) ||
+    if (glov_input.keyDownEdge(KEYS.RETURN, key_opts) ||
       glov_input.padButtonDownEdge(PAD.A)
     ) {
       button_click = { kb: true };
