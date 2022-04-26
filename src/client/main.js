@@ -48,6 +48,8 @@ const SPEED_PLAY = 1;
 const SPEED_FF = 5;
 let speed = SPEED_PLAY;
 
+const allow_pause = engine.defines.PAUSE;
+
 let sprites = {};
 let particles;
 
@@ -1563,11 +1565,11 @@ function drawBoard(x0, y0, w, h) {
     w: FF_BUTTON_SIZE, h: FF_BUTTON_SIZE,
     img: sprites.tiles_ui,
     frame: speed === SPEED_FF ? 9 : speed === SPEED_PAUSE ? 13 : 8,
-    tooltip: 'Toggle [F]ast-forward\n' +
-      `${input.touch_mode ? '[Double-tap]' : '[Space] or [Double-click]'} to pause`,
+    tooltip: 'Toggle [F]ast-forward' +
+      (allow_pause ? `${input.touch_mode ? '\n[Double-tap]' : '\n[Space] or [Double-click]'} to pause` : ''),
     no_bg: true,
   })) {
-    if (speed !== SPEED_PAUSE && ui.button_click.was_double_click) {
+    if (allow_pause && speed !== SPEED_PAUSE && ui.button_click.was_double_click) {
       speed = SPEED_PAUSE;
     } else {
       if (speed !== SPEED_PLAY) {
@@ -1585,7 +1587,7 @@ function drawBoard(x0, y0, w, h) {
       speed = SPEED_FF;
     }
   }
-  if (input.keyUpEdge(KEYS.SPACE)) {
+  if (allow_pause && input.keyUpEdge(KEYS.SPACE)) {
     ui.playUISound('button_click');
     if (speed !== SPEED_PLAY) {
       speed = SPEED_PLAY;
