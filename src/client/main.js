@@ -2121,7 +2121,7 @@ function stateHighScores() {
       'Loading...');
     return;
   }
-  let widths = [10, 60, 24, 24];
+  let widths = [12, 60, 24, 24];
   let widths_total = 0;
   for (let ii = 0; ii < widths.length; ++ii) {
     widths_total += widths[ii];
@@ -2435,5 +2435,5 @@ export function main() {
   init();
 
   pumpMusic();
-  engine.setState(engine.DEBUG ? statePlay : stateMenu);
+  engine.setState(engine.DEBUG ? stateHighScores : stateMenu);
 }
