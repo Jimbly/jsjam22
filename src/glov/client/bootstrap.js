@@ -76,3 +76,8 @@ window.debugmsg = function (msg, clear) {
     debug.innerText += `${msg}\n`;
   }
 };
+
+// Placeholder profiler functions (in case shared/startup code calls them) until
+//   profiler is initialized/enabled.
+// eslint-disable-next-line @typescript-eslint/no-empty-function, func-name-matching
+window.profilerStart = window.profilerStop = window.profilerStopStart = function nop() {};

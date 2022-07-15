@@ -1,5 +1,5 @@
-import { Platform } from 'glov/common/enums.js';
 import assert from 'assert';
+import { Platform } from 'glov/common/enums';
 
 export class SemanticVersion {
   readonly major: number;

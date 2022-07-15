@@ -3,6 +3,7 @@
 
 export const MAX_SEMANTIC = 5;
 
+/* eslint-disable import/order */
 const assert = require('assert');
 const engine = require('./engine.js');
 const { errorReportClear, errorReportSetDetails, glovErrorReport } = require('./error_report.js');

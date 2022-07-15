@@ -1,16 +1,47 @@
 // Portions Copyright 2020 Jimb Esser (https://github.com/Jimbly/)
 // Released under MIT License: https://opensource.org/licenses/MIT
 
+/* eslint-disable import/order */
+const assert = require('assert');
 const engine = require('./engine.js');
+const { style } = require('./font.js');
 const camera2d = require('./camera2d.js');
 const in_event = require('./in_event.js');
 const input = require('./input.js');
 const { abs } = Math;
+const { uiGetDOMElem } = require('./ui.js');
 const ui = require('./ui.js');
 const settings = require('./settings.js');
+const { SPOT_DEFAULT_BUTTON, spot, spotFocusSteal, spotKey } = require('./spot.js');
+
+let style_link_default = style(null, {
+  color: 0x5040FFff,
+  outline_width: 1.0,
+  outline_color: 0x00000020,
+});
+let style_link_hover_default = style(null, {
+  color: 0x0000FFff,
+  outline_width: 1.0,
+  outline_color: 0x00000020,
+});
+
+export function linkGetDefaultStyle() {
+  return style_link_default;
+}
 
 let state_cache = {};
 let good_url = /https?:\/\//;
+
+function preventFocus(evt) {
+  evt.preventDefault();
+  if (evt.relatedTarget) {
+    // Revert focus back to previous blurring element (canvas or edit box)
+    evt.relatedTarget.focus();
+  } else {
+    // No previous focus target, blur instead
+    evt.currentTarget.blur();
+  }
+}
 
 // Create an invisible A elem in the DOM so we get all of the good browsery
 // behavior for a link area.
@@ -19,7 +50,7 @@ export function link(param) {
   if (!url.match(good_url)) {
     url = `${document.location.protocol}//${url}`;
   }
-  let key = `${x}_${y}`;
+  let key = spotKey(param);
   let state = state_cache[key];
   if (!state) {
     state = state_cache[key] = { clicked: false };
@@ -28,9 +59,10 @@ export function link(param) {
 
   let rect = { x, y, w, h };
 
-  if (camera2d.clipTestRect(rect) && !settings.shader_debug) {
+  // TODO: use spot_ret.allow_focus instead of all of this?
+  if (camera2d.clipTestRect(rect) && !(settings.shader_debug || settings.show_profiler)) {
     // at least some is not clipped
-    let elem = ui.getDOMElem(allow_modal, state.elem);
+    let elem = uiGetDOMElem(state.elem, allow_modal);
     if (elem !== state.elem) {
       state.elem = elem;
       if (elem) {
@@ -42,6 +74,11 @@ export function link(param) {
         a_elem.className = 'glovui_link noglov';
         a_elem.setAttribute('target', '_blank');
         a_elem.setAttribute('href', url);
+        // Make the element unfocusable, so that pressing enter at some point
+        //   after clicking a link does not re-activate the link, additionally
+        //   pressing tab should not (in the browser) focus these links.
+        a_elem.setAttribute('tabindex', '-1');
+        a_elem.addEventListener('focus', preventFocus);
         state.url = url;
         if (internal) {
           let down_x;
@@ -87,21 +124,36 @@ export function link(param) {
 }
 
 export function linkText(param) {
-  let { style_link, style_link_hover, x, y, z, font_size, text, url } = param;
+  let { style_link, style_link_hover, x, y, z, font_size, text, url, internal } = param;
   text = text || url;
   z = z || Z.UI;
   font_size = font_size || ui.font_height;
   // Also: any parameter to link(), e.g. url
-  let w = ui.font.getStringWidth(style_link, font_size, text);
+  let w = ui.font.getStringWidth(style_link || style_link_default, font_size, text);
   let h = font_size;
-  let mouseover = input.mouseOver({ x, y, w, h, peek: true }) && !input.mousePosIsTouch();
-  let style = mouseover ? style_link_hover : style_link;
-  ui.font.drawSized(style, x, y, z, font_size, text);
-  let underline_w = 1;
-  ui.drawLine(x, y + h - underline_w, x + w, y + h - underline_w, z - 0.5, underline_w, 1, style.color_vec4);
   param.w = w;
   param.h = h;
-  return link(param);
+  param.def = SPOT_DEFAULT_BUTTON;
+  let spot_ret = spot(param);
+  let style_use = spot_ret.focused ?
+    (style_link_hover || style_link_hover_default) :
+    (style_link || style_link_default);
+  ui.font.drawSized(style_use, x, y, z, font_size, text);
+  let underline_w = 1;
+  ui.drawLine(x, y + h - underline_w, x + w, y + h - underline_w, z - 0.5, underline_w, 1, style_use.color_vec4);
+  let clicked = link(param);
+  if (clicked) {
+    spotFocusSteal(param);
+  }
+  if (spot_ret.ret && !internal) {
+    // activated (via keyboard or gamepad), and an external link, act as if we clicked it
+    let key = spotKey(param);
+    let state = state_cache[key];
+    assert(state);
+    assert(state.a_elem);
+    state.a_elem.click();
+  }
+  return clicked || spot_ret.ret;
 }
 
 export function linkTick() {

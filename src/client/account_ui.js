@@ -3,26 +3,16 @@
 
 export const guest_regex = /^anon\d+$/;
 
+/* eslint import/order:off */
 const assert = require('assert');
 const local_storage = require('glov/client/local_storage.js');
 const glov_font = require('glov/client/font.js');
 const { click, KEYS, keyDownEdge } = require('glov/client/input.js');
-const { linkText } = require('glov/client/link.js');
+const { linkGetDefaultStyle, linkText } = require('glov/client/link.js');
 const { random, round } = Math;
 const net = require('glov/client/net.js');
 const ui = require('glov/client/ui.js');
 const { vec4 } = require('glov/common/vmath.js');
-
-export let style_link = glov_font.style(null, {
-  color: 0x5040FFff,
-  outline_width: 1.0,
-  outline_color: 0x00000020,
-});
-export let style_link_hover = glov_font.style(null, {
-  color: 0x0000FFff,
-  outline_width: 1.0,
-  outline_color: 0x00000020,
-});
 
 export function formatUserID(user_id, display_name) {
   if (user_id.match(guest_regex)) {
@@ -137,8 +127,7 @@ AccountUI.prototype.showLogin = function (param) {
       ui.font.drawSizedAligned(style, x, y, Z.UI, terms_height, glov_font.ALIGN.HCENTER, 0, 0,
         'and');
       linkText({
-        style_link, style_link_hover,
-        x: x - and_w / 2 - ui.font.getStringWidth(style_link, terms_height, 'Terms of Service'),
+        x: x - and_w / 2 - ui.font.getStringWidth(linkGetDefaultStyle(), terms_height, 'Terms of Service'),
         y,
         z: Z.UI,
         font_size: terms_height,
@@ -146,7 +135,6 @@ AccountUI.prototype.showLogin = function (param) {
         text: 'Terms of Service',
       });
       linkText({
-        style_link, style_link_hover,
         x: x + and_w / 2,
         y,
         z: Z.UI,

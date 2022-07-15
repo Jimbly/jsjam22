@@ -2,6 +2,10 @@
 // Released under MIT License: https://opensource.org/licenses/MIT
 /* eslint-env browser */
 
+// eslint-disable-next-line no-use-before-define
+exports.textureLoad = load;
+
+/* eslint-disable import/order */
 const assert = require('assert');
 const engine = require('./engine.js');
 const { filewatchOn } = require('./filewatch.js');
@@ -97,6 +101,20 @@ export function bindArray(texs) {
   }
 }
 
+export function cmpTextureArray(texsa, texsb) {
+  let d = texsa.length - texsb.length;
+  if (d) {
+    return d;
+  }
+  for (let ii = 0; ii < texsa.length; ++ii) {
+    d = texsa[ii].id - texsb[ii].id;
+    if (d) {
+      return d;
+    }
+  }
+  return 0;
+}
+
 export function isArrayBound(texs) {
   for (let ii = 0; ii < texs.length; ++ii) {
     let tex = texs[ii];
@@ -115,13 +133,23 @@ export function texturesResetState() {
   }
   unbindAll(gl.TEXTURE_2D);
   setUnit(0);
-  gl.getError();
+  // Disabling this.  In theory clearing the GL error at the beginning of the frame
+  //   is good for debugging, and shouldn't actually harm anything (possibly stall
+  //   as it's the first GL call of the frame, but theoretically not much more than
+  //   whatever the next GL call would be), however in practice this is adding up
+  //   to a couple ms (when running at /max_fps 1000) in Chrome.  Does not seem to
+  //   have any effect either way under GPU-bound conditions though.
+  // profilerStart('gl.getError()');
+  // gl.getError();
+  // profilerStop('gl.getError()');
 }
 
 
 let auto_unload_textures = [];
 
+let last_id = 0;
 function Texture(params) {
+  this.id = ++last_id;
   this.name = params.name;
   this.loaded = false;
   this.load_fail = false;
@@ -203,6 +231,7 @@ Texture.prototype.setSamplerState = function (params) {
 };
 
 Texture.prototype.updateData = function updateData(w, h, data) {
+  profilerStart('Texture:updateData');
   assert(!this.destroyed);
   bindForced(this);
   this.last_use = frame_timestamp;
@@ -241,6 +270,7 @@ Texture.prototype.updateData = function updateData(w, h, data) {
   } else {
     // Ensure this is an Image or Canvas
     if (!data.width) {
+      profilerStop();
       return `Missing width (${data.width}) ("${String(data).slice(0, 100)}")`;
     }
     if (this.is_cube) {
@@ -290,24 +320,28 @@ Texture.prototype.updateData = function updateData(w, h, data) {
       gl.texImage2D(this.target, 0, this.format.internal_type, this.format.internal_type, this.format.gl_type, data);
     }
   }
+  let err = null;
   let gl_err = gl.getError();
   if (gl_err) {
-    return `GLError(${gl_err})`;
+    err = `GLError(${gl_err})`;
   }
-  if (this.mipmaps) {
+  if (!err && this.mipmaps) {
     gl.generateMipmap(this.target);
     gl_err = gl.getError();
     if (gl_err) {
-      return `GLError(${gl_err})`;
+      err = `GLError(${gl_err})`;
     }
   }
-  this.updateGPUMem();
-  this.eff_handle = this.handle;
-  this.loaded = true;
+  if (!err) {
+    this.updateGPUMem();
+    this.eff_handle = this.handle;
+    this.loaded = true;
 
-  callEach(this.on_load, this.on_load = null, this);
+    callEach(this.on_load, this.on_load = null, this);
+  }
 
-  return null;
+  profilerStop();
+  return err;
 };
 
 Texture.prototype.onLoad = function (cb) {
@@ -332,6 +366,7 @@ Texture.prototype.loadURL = function loadURL(url, filter) {
 
   let load_gen = tex.load_gen = (tex.load_gen || 0) + 1;
   function tryLoad(next) {
+    profilerStart('Texture:tryLoad');
     let did_next = false;
     function done(img) {
       if (!did_next) {
@@ -342,7 +377,9 @@ Texture.prototype.loadURL = function loadURL(url, filter) {
 
     let img = new Image();
     img.onload = function () {
+      profilerStart('Texture:onload');
       done(img);
+      profilerStop();
     };
     function fail() {
       done(null);
@@ -350,6 +387,7 @@ Texture.prototype.loadURL = function loadURL(url, filter) {
     img.onerror = fail;
     img.crossOrigin = 'anonymous';
     img.src = url;
+    profilerStop();
   }
 
   ++load_count;

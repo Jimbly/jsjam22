@@ -1,3 +1,4 @@
+/* eslint-disable import/order */
 const assert = require('assert');
 const request = require('request');
 const NodeRSA = require('node-rsa');

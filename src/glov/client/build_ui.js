@@ -1,3 +1,4 @@
+/* eslint-disable import/order */
 const camera2d = require('./camera2d.js');
 const engine = require('./engine.js');
 const glov_font = require('./font.js');
@@ -15,9 +16,6 @@ Z.BUILD_ERRORS = Z.BUILD_ERRORS || 9900;
 
 function onGBState(state) {
   gbstate = state;
-  if (state && Object.keys(state.tasks).length === 1 && state.tasks.eslint) {
-    gbstate = null;
-  }
 }
 
 function onServerError(err) {

@@ -1,4 +1,4 @@
-let ignore_style = true; // Set to true when editing other people's code
+let ignore_style = false; // Set to true when editing other people's code
 let relaxed = true; // Specific things I'm relaxing for convenience, probably not the best for readability
 
 module.exports = {
@@ -17,17 +17,22 @@ module.exports = {
     // Our engine globals
     "gl": true,
     "Z": true,
+    "profilerStart": true,
+    "profilerStop": true,
+    "profilerStopStart": true,
     // Our pre-processor defines
     "BUILD_TIMESTAMP": true,
   },
   "parser": "@typescript-eslint/parser",
   "plugins": [
-    "@typescript-eslint"
+    "@typescript-eslint",
+    "import",
   ],
   "extends": [
     "eslint:recommended",
     "plugin:@typescript-eslint/eslint-recommended",
-    "plugin:@typescript-eslint/recommended"
+    "plugin:@typescript-eslint/recommended",
+    "plugin:import/typescript",
   ],
   "parserOptions": {
     "ecmaVersion": 2020,
@@ -38,6 +43,7 @@ module.exports = {
     "@typescript-eslint/no-array-constructor": "error",
     "@typescript-eslint/no-empty-function": "error",
     "@typescript-eslint/no-extra-semi": "error",
+    "@typescript-eslint/no-invalid-this": "error",
     "@typescript-eslint/no-redeclare": "error",
     "@typescript-eslint/no-shadow": [
       "error",
@@ -144,6 +150,23 @@ module.exports = {
       "error",
       "beside"
     ],
+    "import/no-dynamic-require": "error",
+    "import/order": ["error", {
+      "groups": [
+        "builtin",
+        ["external", "internal"],
+        "parent",
+        "sibling",
+        "index",
+        "object",
+        "type",
+      ],
+      "warnOnUnassignedImports": true,
+      "alphabetize": {
+        "order": "asc",
+        "caseInsensitive": false,
+      }
+    }],
     "indent": [
       "error",
       2,
@@ -266,11 +289,11 @@ module.exports = {
     "no-implied-eval": "error",
     "no-inline-comments": "off",
     "no-invalid-regexp": "error",
-    "no-invalid-this": "error",
+    "no-invalid-this": "off", // replaced with @typescript-eslint/no-invalid-this
     "no-irregular-whitespace": "error",
     "no-iterator": "error",
     "no-label-var": "error",
-    "no-labels": "off", // JE
+    "no-labels": "error",
     "no-lone-blocks": "error",
     "no-lonely-if": "off", // JE
     "no-loop-func": "error",
@@ -427,7 +450,7 @@ module.exports = {
     "prefer-reflect": "off", // JE
     "prefer-rest-params": "error",
     "prefer-spread": "off",
-    "prefer-template": ignore_style ? "off" : "error",
+    "prefer-template": "off", // JE: jsjam
     "quote-props": relaxed ? "off" : [
       "error",
       "consistent"
@@ -451,7 +474,11 @@ module.exports = {
       "error",
       "last"
     ],
-    "sort-imports": "error",
+    "sort-imports":["error", {
+      "ignoreCase": false,
+      "ignoreDeclarationSort": true,
+      "ignoreMemberSort": false,
+    }],
     "sort-keys": "off",
     "sort-vars": "off", // JE
     "space-before-blocks": [

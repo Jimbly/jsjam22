@@ -249,8 +249,10 @@ export function refreshTitle() {
 }
 
 function periodicRefreshTitle() {
+  profilerStart('periodicRefreshTitle');
   refreshTitle();
   setTimeout(periodicRefreshTitle, 1000);
+  profilerStop();
 }
 
 function onPopState() {
@@ -268,6 +270,33 @@ export function onURLChange(cb) {
 let last_history_set_time = 0;
 let scheduled = false;
 let need_push_state = false;
+function updateHistoryCommit() {
+  profilerStart('updateHistoryCommit');
+  scheduled = false;
+  last_history_set_time = Date.now();
+  let url = `${page_base}${last_history_str}`;
+  if (url.endsWith('?')) {
+    url = url.slice(0, -1);
+  }
+  try {
+    if (need_push_state) {
+      need_push_state = false;
+      window.history.pushState(undefined, eff_title, url);
+    } else {
+      window.history.replaceState(undefined, eff_title, url);
+    }
+  } catch (e) {
+    // ignore; some browsers disallow this, I guess
+  }
+  if (eff_title) {
+    document.title = eff_title;
+  }
+  if (on_url_change) {
+    on_url_change();
+  }
+  //window.history.replaceState(undefined, eff_title, `#${last_history_str}`);
+  profilerStop();
+}
 function updateHistory(new_need_push_state) {
   let new_str = toString();
   if (last_history_str === new_str) {
@@ -286,31 +315,7 @@ function updateHistory(new_need_push_state) {
     delay = 1;
   }
   scheduled = true;
-  setTimeout(function () {
-    scheduled = false;
-    last_history_set_time = Date.now();
-    let url = `${page_base}${last_history_str}`;
-    if (url.endsWith('?')) {
-      url = url.slice(0, -1);
-    }
-    try {
-      if (need_push_state) {
-        need_push_state = false;
-        window.history.pushState(undefined, eff_title, url);
-      } else {
-        window.history.replaceState(undefined, eff_title, url);
-      }
-    } catch (e) {
-      // ignore; some browsers disallow this, I guess
-    }
-    if (eff_title) {
-      document.title = eff_title;
-    }
-    if (on_url_change) {
-      on_url_change();
-    }
-    //window.history.replaceState(undefined, eff_title, `#${last_history_str}`);
-  }, delay);
+  setTimeout(updateHistoryCommit, delay);
 }
 
 // Optional startup

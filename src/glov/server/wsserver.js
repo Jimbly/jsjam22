@@ -1,8 +1,9 @@
 // Portions Copyright 2019 Jimb Esser (https://github.com/Jimbly/)
 // Released under MIT License: https://opensource.org/licenses/MIT
 
+/* eslint-disable import/order */
 import { VersionSupport, getVersionSupport, isValidVersion } from './version_management';
-import { isValidPlatform } from 'glov/common/enums.js';
+import { isValidPlatform } from 'glov/common/enums';
 
 const ack = require('glov/common/ack.js');
 const { ackInitReceiver, ackWrapPakFinish, ackWrapPakPayload } = ack;

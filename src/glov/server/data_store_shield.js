@@ -21,6 +21,7 @@ export let dss_stats = {
   inflight_search: 0,
 };
 
+/* eslint-disable import/order */
 const assert = require('assert');
 const metrics = require('./metrics.js');
 const { getUID } = require('./log.js');

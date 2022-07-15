@@ -1,17 +1,50 @@
 // Portions Copyright 2019 Jimb Esser (https://github.com/Jimbly/)
 // Released under MIT License: https://opensource.org/licenses/MIT
 
+exports.create = editBoxCreate; // eslint-disable-line no-use-before-define
+
 const assert = require('assert');
 const camera2d = require('./camera2d.js');
 const engine = require('./engine.js');
-const glov_input = require('./input.js');
+const {
+  KEYS,
+  eatAllKeyboardInput,
+  mouseConsumeClicks,
+  keyUpEdge,
+  pointerLockEnter,
+  pointerLockExit,
+  pointerLocked,
+  inputClick,
+} = require('./input.js');
+const {
+  SPOT_NAV_LEFT,
+  SPOT_NAV_RIGHT,
+  spotFocusCheck,
+  spotFocusSteal,
+  spotUnfocus,
+  spotlog,
+} = require('./spot.js');
 const glov_ui = require('./ui.js');
-
-const { focuslog } = glov_ui;
+const { uiGetDOMElem } = require('./ui.js');
 
 let form_hook_registered = false;
 let active_edit_box;
 let active_edit_box_frame;
+
+let this_frame_edit_boxes = [];
+let last_frame_edit_boxes = [];
+
+export function editBoxTick() {
+  let expected_last_frame = engine.frame_index - 1;
+  for (let ii = 0; ii < last_frame_edit_boxes.length; ++ii) {
+    let edit_box = last_frame_edit_boxes[ii];
+    if (edit_box.last_frame < expected_last_frame) {
+      edit_box.unrun();
+    }
+  }
+  last_frame_edit_boxes = this_frame_edit_boxes;
+  this_frame_edit_boxes = [];
+}
 
 function setActive(edit_box) {
   active_edit_box = edit_box;
@@ -27,18 +60,20 @@ function formHook(ev) {
   active_edit_box.submitted = true;
   active_edit_box.updateText();
   if (active_edit_box.pointer_lock && !active_edit_box.text) {
-    glov_input.pointerLockEnter('edit_box_submit');
+    pointerLockEnter('edit_box_submit');
   }
 }
 
+let last_key_id = 0;
+
 class GlovUIEditBox {
   constructor(params) {
+    this.key = `eb${++last_key_id}`;
     this.x = 0;
     this.y = 0;
     this.z = Z.UI; // actually in DOM, so above everything!
     this.w = glov_ui.button_width;
     this.type = 'text';
-    this.allow_modal = false;
     // this.h = glov_ui.button_height;
     this.font_height = glov_ui.font_height;
     this.text = '';
@@ -54,6 +89,12 @@ class GlovUIEditBox {
     this.esc_clears = true;
     this.multiline = 0;
     this.autocomplete = false;
+    this.custom_nav = {
+      // We want left/right to be handled by the input element, not used to change focus.
+      [SPOT_NAV_LEFT]: null,
+      [SPOT_NAV_RIGHT]: null,
+    };
+    this.sticky_focus = true;
     this.applyParams(params);
     assert.equal(typeof this.text, 'string');
 
@@ -64,6 +105,7 @@ class GlovUIEditBox {
     this.submitted = false;
     this.pointer_lock = false;
     this.last_frame = 0;
+    this.out = {}; // Used by spotFocusCheck
   }
   applyParams(params) {
     if (!params) {
@@ -76,6 +118,7 @@ class GlovUIEditBox {
       // do not trigger assert if `params` has a `text: undefined` member
       this.text = '';
     }
+    this.h = this.font_height;
   }
   updateText() {
     this.text = this.input.value;
@@ -100,14 +143,14 @@ class GlovUIEditBox {
     } else {
       this.onetime_focus = true;
     }
-    glov_ui.focusSteal(this);
+    spotFocusSteal(this);
     this.is_focused = true;
-    if (this.pointer_lock && glov_input.pointerLocked()) {
-      glov_input.pointerLockExit();
+    if (this.pointer_lock && pointerLocked()) {
+      pointerLockExit();
     }
   }
   unfocus() {
-    glov_ui.focusNext(this);
+    spotUnfocus();
   }
   isFocused() { // call after .run()
     return this.is_focused;
@@ -115,35 +158,35 @@ class GlovUIEditBox {
 
   updateFocus() {
     let was_glov_focused = this.is_focused;
-    let glov_focused = glov_ui.focusCheck(this);
+    let spot_ret = spotFocusCheck(this);
+    let { focused } = spot_ret;
     let dom_focused = this.input && document.activeElement === this.input;
-    if (was_glov_focused !== glov_focused) {
+    if (was_glov_focused !== focused) {
       // something external (from clicks/keys in GLOV) changed, apply it if it doesn't match
-      if (glov_focused && !dom_focused && this.input) {
-        focuslog('GLOV focused, DOM not, focusing', this);
+      if (focused && !dom_focused && this.input) {
+        spotlog('GLOV focused, DOM not, focusing', this);
         this.input.focus();
       }
-      if (!glov_focused && dom_focused) {
-        focuslog('DOM focused, GLOV not, and changed, blurring', this);
+      if (!focused && dom_focused) {
+        spotlog('DOM focused, GLOV not, and changed, blurring', this);
         this.input.blur();
       }
-    } else if (dom_focused && !glov_focused) {
-      focuslog('DOM focused, GLOV not, stealing', this);
-      glov_ui.focusSteal(this);
-      glov_focused = true;
-    } else if (!dom_focused && glov_focused) {
+    } else if (dom_focused && !focused) {
+      spotlog('DOM focused, GLOV not, stealing', this);
+      spotFocusSteal(this);
+      focused = true;
+    } else if (!dom_focused && focused) {
       // Leave it alone, it may be a browser pop-up such as for passwords
     }
-    let focused = glov_focused;
 
     if (focused) {
       setActive(this);
-      let key_opt = (this.pointer_lock && !this.text) ? { in_event_cb: glov_input.pointerLockEnter } : null;
-      if (glov_input.keyUpEdge(glov_input.KEYS.ESC, key_opt)) {
+      let key_opt = (this.pointer_lock && !this.text) ? { in_event_cb: pointerLockEnter } : null;
+      if (keyUpEdge(KEYS.ESC, key_opt)) {
         if (this.text && this.esc_clears) {
           this.setText('');
         } else {
-          glov_ui.focusCanvas();
+          spotUnfocus();
           if (this.input) {
             this.input.blur();
           }
@@ -153,7 +196,7 @@ class GlovUIEditBox {
       }
     }
     this.is_focused = focused;
-    return focused;
+    return spot_ret;
   }
 
   run(params) {
@@ -166,10 +209,10 @@ class GlovUIEditBox {
     this.last_frame = engine.frame_index;
 
     this.canceled = false;
-    let focused = this.updateFocus();
+    let { allow_focus, focused } = this.updateFocus();
 
-    glov_ui.this_frame_edit_boxes.push(this);
-    let elem = glov_ui.getDOMElem(this.allow_modal, this.elem);
+    this_frame_edit_boxes.push(this);
+    let elem = allow_focus && uiGetDOMElem(this.elem, true);
     if (elem !== this.elem) {
       if (elem) {
         // new DOM element, initialize
@@ -243,15 +286,15 @@ class GlovUIEditBox {
 
     if (focused) {
       if (this.auto_unfocus) {
-        if (glov_input.click({ peek: true })) {
-          glov_ui.focusSteal('canvas');
+        if (inputClick({ peek: true })) {
+          spotUnfocus();
         }
       }
       // keyboard input is handled by the INPUT element, but allow mouse events to trickle
-      glov_input.eatAllKeyboardInput();
+      eatAllKeyboardInput();
     }
     // Eat mouse events going to the edit box
-    glov_input.mouseConsumeClicks({ x: this.x, y: this.y, w: this.w, h: this.font_height });
+    mouseConsumeClicks({ x: this.x, y: this.y, w: this.w, h: this.h });
 
     if (this.submitted) {
       this.submitted = false;
@@ -272,6 +315,6 @@ class GlovUIEditBox {
 GlovUIEditBox.prototype.SUBMIT = 'submit';
 GlovUIEditBox.prototype.CANCEL = 'cancel';
 
-export function create(params) {
+export function editBoxCreate(params) {
   return new GlovUIEditBox(params);
 }

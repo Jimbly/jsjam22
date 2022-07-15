@@ -1,6 +1,7 @@
 // Portions Copyright 2019 Jimb Esser (https://github.com/Jimbly/)
 // Released under MIT License: https://opensource.org/licenses/MIT
 
+/* eslint-disable import/order */
 const argv = require('minimist')(process.argv.slice(2));
 const assert = require('assert');
 const { dataStoresInit } = require('./data_stores_init.js');
@@ -161,7 +162,7 @@ export function startup(params) {
   process.on('uncaughtException', channel_server.handleUncaughtError.bind(channel_server));
   ws_server.on('uncaught_exception', channel_server.handleUncaughtError.bind(channel_server));
 
-  masterInitApp(channel_server, app);
+  masterInitApp(channel_server, app, argv);
   errorReportsInit(app);
   idmapperWorkerInit(channel_server);
   if (argv.dev) {

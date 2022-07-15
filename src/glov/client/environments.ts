@@ -1,8 +1,8 @@
-import * as urlhash from './urlhash';
 import assert from 'assert';
+import { setAbilityReload } from './client_config';
 import { cmd_parse } from './cmds';
 import { netForceDisconnect } from './net';
-import { setAbilityReload } from './client_config';
+import * as urlhash from './urlhash';
 
 export interface EnvironmentConfig {
   name: string;
@@ -19,8 +19,8 @@ let api_path: string;     // API base like http://foo.bar/api/ (with trailing sl
 let texture_base: string; // Texture base like http://foo.bar/ (with trailing slash)
 
 function applyEnvironment() {
-  link_base = current_environment?.link_base || urlhash.getURLBase();
-  api_path = current_environment?.api_path || `${link_base}api/`;
+  link_base = (current_environment && current_environment.link_base) || urlhash.getURLBase();
+  api_path = (current_environment && current_environment.api_path) || `${link_base}api/`;
   texture_base = link_base.replace('//localhost:', '//127.0.0.1:');
 }
 
@@ -32,7 +32,7 @@ export function getCurrentEnvironment<T extends EnvironmentConfig>(): T | null {
 }
 export function setCurrentEnvironment(environment_name: string | undefined | null): void {
   let prev_environment = current_environment;
-  current_environment = all_environments[environment_name ?? ''] || default_environment;
+  current_environment = (environment_name && all_environments[environment_name]) || default_environment;
   if (current_environment !== prev_environment) {
     applyEnvironment();
     setAbilityReload(false);
@@ -64,7 +64,8 @@ export function environmentsInit<T extends EnvironmentConfig>(
     all_names.push(env_name);
   }
 
-  current_environment = default_environment = all_environments[default_environment_name ?? ''] || null;
+  current_environment = default_environment =
+    (default_environment_name && all_environments[default_environment_name]) || null;
   applyEnvironment();
 
   if (!all_names.some((name) => name.toLowerCase() === 'default')) {

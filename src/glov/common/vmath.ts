@@ -1,18 +1,30 @@
 // Portions Copyright 2019 Jimb Esser (https://github.com/Jimbly/)
 // Released under MIT License: https://opensource.org/licenses/MIT
-/* eslint no-bitwise:off */
 
 // Vector math functions required by the rest of the engine taken piecemeal from
 // gl-matrix and related, as well as some generic math utilities
-exports.mat3 = require('gl-mat3/create');
-exports.mat4 = require('gl-mat4/create');
+const mat3Create = require('gl-mat3/create');
+const mat4Create = require('gl-mat4/create');
 
 const { abs, acos, max, min, floor, pow, round, sqrt } = Math;
+
+export type Mat3 = Float32Array |
+  [number, number, number,
+   number, number, number,
+   number, number, number];
+export type Mat4 = Float32Array |
+  [number, number, number, number,
+   number, number, number, number,
+   number, number, number, number,
+   number, number, number, number];
 
 export type Vec4 = [number, number, number, number] | Float32Array | Int32Array;
 export type Vec3 = [number, number, number] | Vec4;
 export type Vec2 = [number, number] | Vec3;
 export type Vec1 = [number] | Vec2;
+
+export const mat3 = mat3Create as () => Mat3;
+export const mat4 = mat4Create as () => Mat4;
 
 export function vec1(v: number): Vec1 {
   return new Float32Array([v || 0]);
@@ -87,8 +99,8 @@ function frozenVec4(a: number, b: number, c: number, d: number): Vec4 {
 export const unit_vec = frozenVec4(1,1,1,1);
 export const half_vec = frozenVec4(0.5,0.5,0.5,0.5);
 export const zero_vec = frozenVec4(0,0,0,0);
-export const identity_mat3 = exports.mat3();
-export const identity_mat4 = exports.mat4();
+export const identity_mat3 = mat3();
+export const identity_mat4 = mat4();
 export const xaxis = frozenVec4(1,0,0,0);
 export const yaxis = frozenVec4(0,1,0,0);
 export const zaxis = frozenVec4(0,0,1,0);
@@ -129,6 +141,11 @@ export function v2copy(out: Vec2, a: Vec2): Vec2 {
   out[0] = a[0];
   out[1] = a[1];
   return out;
+}
+
+export function v2dist(a: Vec2, b: Vec2): number {
+  return sqrt((a[0] - b[0]) * (a[0] - b[0]) +
+    (a[1] - b[1]) * (a[1] - b[1]));
 }
 
 export function v2distSq(a: Vec2, b: Vec2): number {
@@ -383,7 +400,7 @@ export function v3iMul(a: Vec3, b: Vec3): Vec3 {
   return a;
 }
 
-export function v3mulMat4(out: Vec3, a: Vec3, m: Array<number>): Vec3 {
+export function v3mulMat4(out: Vec3, a: Vec3, m: Mat4): Vec3 {
   let x = a[0];
   let y = a[1];
   let z = a[2];
@@ -394,7 +411,7 @@ export function v3mulMat4(out: Vec3, a: Vec3, m: Array<number>): Vec3 {
 }
 
 // Same as v3mulMat4, but assumes it's a vector with w=1
-export function m4TransformVec3(out: Vec3, a: Vec3, m: Array<number>): Vec3 {
+export function m4TransformVec3(out: Vec3, a: Vec3, m: Mat4): Vec3 {
   let x = a[0];
   let y = a[1];
   let z = a[2];
@@ -429,7 +446,7 @@ export function v3iNormalize(a: Vec3): Vec3 {
 // Treats `a` as vec3 input with w assumed to be 1
 // out[0]/[1] have had perspective divide and converted to normalized 0-1 range
 // out[2] is distance
-export function v3perspectiveProject(out: Vec3, a: Vec3, m: Array<number>): Vec3 {
+export function v3perspectiveProject(out: Vec3, a: Vec3, m: Mat4): Vec3 {
   let x = a[0];
   let y = a[1];
   let z = a[2];
@@ -453,6 +470,13 @@ export function v3round(out: Vec3, a: Vec3): Vec3 {
   out[1] = round(a[1]);
   out[2] = round(a[2]);
   return out;
+}
+
+export function v3iRound(a: Vec3): Vec3 {
+  a[0] = round(a[0]);
+  a[1] = round(a[1]);
+  a[2] = round(a[2]);
+  return a;
 }
 
 export function v3same(a: Vec3, b: Vec3): boolean {

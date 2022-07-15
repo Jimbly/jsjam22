@@ -1,6 +1,7 @@
 // Portions Copyright 2019 Jimb Esser (https://github.com/Jimbly/)
 // Released under MIT License: https://opensource.org/licenses/MIT
 
+/* eslint-disable import/order */
 import { FriendStatus } from 'glov/common/friends_data.js';
 
 const assert = require('assert');
@@ -14,9 +15,11 @@ const {
 const master_worker = require('./master_worker.js');
 const md5 = require('glov/common/md5.js');
 const metrics = require('./metrics.js');
-const { isProfane } = require('glov/common/words/profanity_common.js');
+const { isProfane, isReserved } = require('glov/common/words/profanity_common.js');
 const random_names = require('./random_names.js');
-const { sanitize } = require('glov/common/util.js');
+const { deprecate, sanitize } = require('glov/common/util.js');
+
+deprecate(exports, 'handleChat', 'chattable_worker:handleChat');
 
 const DISPLAY_NAME_MAX_LENGTH = 30;
 const DISPLAY_NAME_WAITING_PERIOD = 23 * 60 * 60 * 1000;
@@ -47,9 +50,10 @@ export function validExternalId(external_id) {
   return external_id.match(regex_valid_external_id);
 }
 
-function validDisplayName(display_name) {
+function validDisplayName(display_name, is_sysadmin) {
   if (!display_name || sanitize(display_name).trim() !== display_name ||
-    isProfane(display_name) || display_name.length > DISPLAY_NAME_MAX_LENGTH
+    isProfane(display_name) || display_name.length > DISPLAY_NAME_MAX_LENGTH ||
+    (!is_sysadmin && isReserved(display_name))
   ) {
     return false;
   }
@@ -175,7 +179,7 @@ export class DefaultUserWorker extends ChannelWorker {
     if (!new_name) {
       return resp_func('Missing name');
     }
-    if (!validDisplayName(new_name)) {
+    if (!validDisplayName(new_name, this.cmd_parse_source.sysadmin)) {
       return resp_func('Invalid display name');
     }
     let old_name = this.getChannelData('public.display_name');
@@ -497,7 +501,7 @@ export class DefaultUserWorker extends ChannelWorker {
     this.setChannelData('private.login_ip', data.ip);
     this.setChannelData('private.login_ua', data.ua);
     let display_name = this.getChannelData('public.display_name');
-    if (!validDisplayName(display_name)) {
+    if (!validDisplayName(display_name, this.getChannelData('public.permissions.sysadmin'))) {
       // Old data with no display_name, or valid display name rules have changed
       let new_display_name = this.user_id;
       if (!validDisplayName(new_display_name)) {
@@ -586,7 +590,7 @@ export class DefaultUserWorker extends ChannelWorker {
     return null;
   }
 
-  handleNewClient(src) {
+  handleNewClient(src, opts) {
     if (this.rich_presence && src.type === 'client' && this.presence_data) {
       if (this.getFriend(src.user_id)?.status !== FriendStatus.Blocked) {
         this.sendChannelMessage(src.channel_id, 'presence', this.presence_data);
@@ -595,6 +599,7 @@ export class DefaultUserWorker extends ChannelWorker {
     if (src.type === 'client' && src.user_id === this.user_id) {
       this.my_clients[src.channel_id] = true;
     }
+    return null;
   }
   updatePresence() {
     let clients = this.data.public.clients || {};
@@ -793,83 +798,6 @@ export function overrideUserWorker(new_user_worker, extra_data) {
       user_worker_init_data[key] = v;
     }
   }
-}
-
-const CHAT_MAX_MESSAGES = 50;
-const CHAT_MAX_LEN = 1024; // Client must be set to this or fewer
-const CHAT_USER_FLAGS = 0x1;
-export function sendChat(worker, id, client_id, display_name, flags, msg) {
-  let self = worker;
-  let chat = self.getChannelData('private.chat', null);
-  if (!chat) {
-    chat = {
-      idx: 0,
-      msgs: [],
-    };
-  }
-  let last_idx = (chat.idx + CHAT_MAX_MESSAGES - 1) % CHAT_MAX_MESSAGES;
-  let last_msg = chat.msgs[last_idx];
-  if (id && last_msg && last_msg.id === id && last_msg.msg === msg) {
-    return 'ERR_ECHO';
-  }
-  let ts = Date.now();
-  let data_saved = { id, msg, flags, ts, display_name };
-  // Not broadcasting timestamp, so client will use local timestamp for smooth fading
-  // Need client_id on broadcast so client can avoid playing a sound for own messages
-  let data_broad = { id, msg, flags, display_name };
-  if (client_id) {
-    data_broad.client_id = client_id;
-  }
-  chat.msgs[chat.idx] = data_saved;
-  chat.idx = (chat.idx + 1) % CHAT_MAX_MESSAGES;
-  // Setting whole 'chat' blob, since we re-serialize the whole metadata anyway
-  if (!self.channel_server.restarting) {
-    self.setChannelData('private.chat', chat);
-  }
-  self.channelEmit('chat', data_broad);
-  return null;
-}
-export function handleChat(src, pak, resp_func) {
-  // eslint-disable-next-line no-invalid-this
-  let self = this;
-  let { user_id, channel_id, display_name } = src; // user_id is falsey if not logged in
-  let client_id = src.id;
-  let id = user_id || channel_id;
-  let flags = pak.readInt();
-  let msg = sanitize(pak.readString()).trim();
-  if (!msg) {
-    return resp_func('ERR_EMPTY_MESSAGE');
-  }
-  if (msg.length > CHAT_MAX_LEN) {
-    return resp_func('ERR_MESSAGE_TOO_LONG');
-  }
-  if (flags & ~CHAT_USER_FLAGS) {
-    return resp_func('ERR_INVALID_FLAGS');
-  }
-  if (self.chatFilter) {
-    let err = self.chatFilter(src, msg);
-    if (err) {
-      self.logSrc(src, `denied chat from ${id} ("${display_name}") ` +
-        `(${channel_id}) (${err}): ${JSON.stringify(msg)}`);
-      return resp_func(err);
-    }
-  }
-  let err = sendChat(self, id, client_id, display_name, flags, msg);
-  if (err) {
-    self.logSrc(src, `suppressed chat from ${id} ("${display_name}") ` +
-      `(${channel_id}) (${err}): ${JSON.stringify(msg)}`);
-    return resp_func(err);
-  } else {
-    // Log entire, non-truncated chat string
-    self.logSrc(src, `chat from ${id} ("${display_name}") ` +
-      `(${channel_id}): ${JSON.stringify(msg)}`);
-    return resp_func();
-  }
-}
-
-export function handleChatGet(src, data, resp_func) {
-  // eslint-disable-next-line no-invalid-this
-  resp_func(null, this.getChannelData('private.chat'));
 }
 
 export function init(channel_server) {

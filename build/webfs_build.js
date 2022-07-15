@@ -1,13 +1,13 @@
 const assert = require('assert');
-const concat = require('glov-build-concat');
-const gb = require('glov-build');
-const { forwardSlashes } = gb;
-const JSON5 = require('json5');
 const path = require('path');
+const { forwardSlashes } = require('glov-build');
+const concat = require('glov-build-concat');
+const JSON5 = require('json5');
 
 const preamble = `(function () {
 var fs = window.glov_webfs = window.glov_webfs || {};`;
 const postamble = '}());';
+const embed_ext = '.json';
 
 let chars = (function () {
   const ESC = String.fromCharCode(27);
@@ -72,8 +72,8 @@ module.exports = function webfsBuild(opts) {
       let { name, priority } = fileFSName(opts, file.relative);
       let data = file.contents;
       let line;
-      if (name.endsWith('.jsobj')) {
-        name = name.slice(0, -6);
+      if (name.endsWith(embed_ext)) {
+        name = name.slice(0, -embed_ext.length);
         line = `fs['${name}'] = ${encodeObj(JSON.parse(data))};`;
       } else {
         line = `fs['${name}'] = [${data.length},'${encodeString(data)}'];`;
@@ -84,6 +84,7 @@ module.exports = function webfsBuild(opts) {
       encodeObj,
       encodeString,
       fileFSName,
+      embed_ext,
     ],
   });
 };

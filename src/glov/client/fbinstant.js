@@ -1,6 +1,5 @@
 /* globals FBInstant */
-import { ExternalUserInfo } from './external_user_info.js';
-
+/* eslint-disable import/order */
 const { registerExternalUserInfoProvider } = require('./social.js');
 const urlhash = require('./urlhash.js');
 const local_storage = require('./local_storage.js');
@@ -143,7 +142,7 @@ export function fbGetLoginInfo(cb) {
 
 /// Maps a player to an ExternalUserInfo
 function mapPlayerToExternalUserInfo(player) {
-  return new ExternalUserInfo(player.getID(), player.getName(), player.getPhoto());
+  return { external_id: player.getID(), name: player.getName(), profile_picture_url: player.getPhoto() };
 }
 
 /// Returns an ExternalUserInfo

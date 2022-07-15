@@ -1,6 +1,7 @@
 // Portions Copyright 2021 Jimb Esser (https://github.com/Jimbly/)
 // Released under MIT License: https://opensource.org/licenses/MIT
 
+/* eslint-disable import/order */
 const camera2d = require('./camera2d.js');
 const { hsvToRGB, rgbToHSV } = require('./hsv.js');
 const input = require('./input.js');

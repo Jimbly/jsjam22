@@ -1,9 +1,9 @@
 const assert = require('assert');
-const engine = require('./engine.js');
 const { floor, min, random } = Math;
+const { ridx } = require('glov/common/util.js');
+const engine = require('./engine.js');
 const settings = require('./settings.js');
 const { soundLoad, soundPlay, soundResumed } = require('./sound.js');
-const { ridx } = require('glov/common/util.js');
 
 const DEFAULT_PERIOD = 30000;
 const DEFAULT_PERIOD_NOISE = 15000;

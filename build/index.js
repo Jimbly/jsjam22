@@ -1,30 +1,31 @@
-//////////////////////////////////////////////////////////////////////////
-// Migration TODO:
-//   parallel running of eslint
-
-const argv = require('minimist')(process.argv.slice(2));
 const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
+
 const { asyncEachSeries } = require('glov-async');
-const babel = require('glov-build-babel');
-const appBundle = require('./app-bundle.js');
-const config = require('./config.js');
-const compress = require('./compress.js');
 const gb = require('glov-build');
+const babel = require('glov-build-babel');
 const preresolve = require('glov-build-preresolve');
+const sourcemap = require('glov-build-sourcemap');
+const argv = require('minimist')(process.argv.slice(2));
+const Replacer = require('regexp-sourcemaps');
+
+const appBundle = require('./app-bundle.js');
+const compress = require('./compress.js');
+const config = require('./config.js');
 const eslint = require('./eslint.js');
 const exec = require('./exec.js');
-const fs = require('fs');
-const json5 = require('./json5.js');
 const gulpish_tasks = require('./gulpish-tasks.js');
-const path = require('path');
-const Replacer = require('regexp-sourcemaps');
-const sourcemap = require('glov-build-sourcemap');
+const json5 = require('./json5.js');
 const typescript = require('./typescript.js');
 const uglify = require('./uglify.js');
 const warnMatch = require('./warn-match.js');
 const webfs = require('./webfs_build.js');
 
 require('./checks.js')(__filename);
+
+// Suppress nonsensical warning from `caniuse-lite` that shows up even when targeting Node
+process.env.BROWSERSLIST_IGNORE_OLD_DATA = 1;
 
 const targets = {
   dev: path.join(__dirname, '../dist/game/build.dev'),
@@ -63,14 +64,6 @@ gb.task({
 gb.task({
   name: 'client_css',
   input: config.client_css,
-  type: gb.SINGLE,
-  target: 'dev',
-  func: copy,
-});
-
-gb.task({
-  name: 'server_static',
-  input: config.server_static,
   type: gb.SINGLE,
   target: 'dev',
   func: copy,
@@ -151,6 +144,14 @@ gb.task({
 for (let ii = 0; ii < config.client_register_cbs.length; ++ii) {
   config.client_register_cbs[ii](gb);
 }
+
+gb.task({
+  name: 'server_static',
+  input: config.server_static,
+  type: gb.SINGLE,
+  target: 'dev',
+  func: copy,
+});
 
 gb.task({
   name: 'client_js_babel_files',
@@ -259,6 +260,7 @@ gb.task({
     compress: false,
     keep_fnames: true,
     mangle: false,
+    output: { semicolons: false },
   }),
 });
 
@@ -630,6 +632,14 @@ gb.task({
     'build_deps',
     'run_server',
     'browser_sync',
+  ],
+});
+
+gb.task({
+  name: 'lint',
+  deps: [
+    'eslint',
+    'check_typescript',
   ],
 });
 

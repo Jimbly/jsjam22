@@ -1,4 +1,5 @@
 /* eslint global-require:off */
+/* eslint-disable import/order */
 const argv = require('minimist')(process.argv.slice(2));
 const assert = require('assert');
 const fs = require('fs');
@@ -25,6 +26,8 @@ let default_env_options = {
       format: 'dev',
       pad_levels: true,
     },
+    // Always immediately "ready" in dev
+    master_ready_timeout: 0,
   },
   prod: {
     log: {

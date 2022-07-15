@@ -1,4 +1,4 @@
-declare module 'glov-global' {
+declare module 'glov/client/global' {
   global {
     interface Window {
       // GLOV injected variables
@@ -13,6 +13,14 @@ declare module 'glov-global' {
 
       // GLOV ui.js
       Z: Record<string, number>;
+
+      // GLOV bootstrap
+      debugmsg: (msg: string, clear: boolean) => void;
+
+      // GLOV profiler
+      profilerStart: (name: string, count?: number) => void;
+      profilerStop: (name: string) => void;
+      profilerStopStart: (name: string, count?: number) => void;
     }
   }
 }

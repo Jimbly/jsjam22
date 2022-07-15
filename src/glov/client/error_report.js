@@ -2,7 +2,8 @@
 
 export let session_uid = `${String(Date.now()).slice(-8)}${String(Math.random()).slice(2,8)}`;
 
-import { getAPIPath } from 'glov/client/environments.js';
+/* eslint-disable import/order */
+import { getAPIPath } from 'glov/client/environments';
 
 const { fetch } = require('./fetch.js');
 const { PLATFORM } = require('./client_config.js');
@@ -11,6 +12,11 @@ let error_report_disabled = false;
 
 export function errorReportDisable() {
   error_report_disabled = true;
+}
+
+let ignore_promises = false;
+export function errorReportIgnoreUncaughtPromises() {
+  ignore_promises = true;
 }
 
 let error_report_details = {};
@@ -76,7 +82,7 @@ export function errorReportClear() {
 //   and doesn't seem to be indicative of any actual problem.
 // Ignoring null at null for similar reasons and because we get nothing useful from the reports.
 // eslint-disable-next-line no-regex-spaces
-let filtered_errors = /avast_submit|vc_request_action|^Script error\.\n  at \(0:0\)$|^null\n  at null\(null:null\)$|getElementsByTagName\('video'\)|document\.getElementById\("search"\)|change_ua|chrome-extension|setConnectedRobot|Failed to (?:start|stop) the audio device|zaloJSV2|getCookie is not defined|originalPrompt|_AutofillCallbackHandler|sytaxError|bannerNight/;
+let filtered_errors = /avast_submit|vc_request_action|^Script error\.\n  at \(0:0\)$|^null\n  at null\(null:null\)$|getElementsByTagName\('video'\)|document\.getElementById\("search"\)|change_ua|chrome-extension|setConnectedRobot|Failed to (?:start|stop) the audio device|zaloJSV2|getCookie is not defined|originalPrompt|_AutofillCallbackHandler|sytaxError|bannerNight|privateSpecialRepair/;
 export function glovErrorReport(is_fatal, msg, file, line, col) {
   console.error(msg);
   if (is_fatal) {
@@ -106,5 +112,8 @@ export function glovErrorReport(is_fatal, msg, file, line, col) {
     `&line=${line||0}&col=${col||0}` +
     `&msg=${escape(msg)}${errorReportDetailsString()}`;
   fetch({ method: 'POST', url }, () => { /* nop */ });
+  if (ignore_promises && msg.match(/Uncaught \(in promise\)/)) {
+    return false;
+  }
   return true;
 }

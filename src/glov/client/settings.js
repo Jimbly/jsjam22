@@ -26,6 +26,7 @@ export function setAsync(key, value) {
 }
 
 export function runTimeDefault(key, new_default) {
+  assert(!change_cbs[key]); // If so, we set `default_clear_on` below, and may have discarded a desired setting.
   // Set a default value that cannot be determined at load time
   // Only set if this has never been modified
   if (!modified[key]) {
@@ -43,7 +44,7 @@ export function push(pairs) {
     exports[key] = pairs[key];
     let cb = change_cbs[key];
     if (cb) {
-      cb();
+      cb(false);
     }
   }
 }
@@ -54,7 +55,7 @@ export function pop() {
     exports[key] = settings_stack[key];
     let cb = change_cbs[key];
     if (cb) {
-      cb();
+      cb(false);
     }
   }
   settings_stack = null;
@@ -80,18 +81,27 @@ export function register(defs) {
       ver: def.ver,
       help: def.help,
       usage: def.usage,
+      prefix_usage_with_help: def.prefix_usage_with_help,
       on_change: def.on_change,
       access_run: def.access_run,
       access_show: def.access_show,
+      default_value: def.default_value,
     });
   });
 }
 
 register({
   max_fps: {
-    label: 'Max FPS',
+    label: 'Maximum frame rate (FPS)',
+    prefix_usage_with_help: true,
+    usage:
+      'Display current maximum: /max_fps\n' +
+      'Disable maximum FPS limit: /max_fps 0 (highly recommended)\n' +
+      'Set maximum FPS limit: /max_fps 30\n' +
+      'Default: /max_fps 0',
     default_value: 0,
     type: cmd_parse.TYPE_FLOAT,
+    ver: 1,
   },
   render_scale: {
     label: 'Render Scale (3D)',

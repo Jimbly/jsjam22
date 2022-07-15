@@ -7,6 +7,7 @@
   // The -t tells it not to embed the textures, but just leave the URIs
  */
 
+/* eslint-disable import/order */
 const assert = require('assert');
 const geom = require('./geom.js');
 const glb_parser = require('./glb/parser.js');

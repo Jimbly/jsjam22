@@ -2,9 +2,9 @@
 // Released under MIT License: https://opensource.org/licenses/MIT
 /* eslint no-bitwise:off */
 
+const { vec2, v2copy, vec4, v4mulAdd } = require('glov/common/vmath.js');
 const glov_input = require('./input.js');
 const glov_ui = require('./ui.js');
-const { vec2, v2copy, vec4, v4mulAdd } = require('glov/common/vmath.js');
 
 const JUMP_THRESHOLD = 0.5;
 const JUMP_TIME = 0.125;

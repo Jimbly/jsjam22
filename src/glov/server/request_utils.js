@@ -1,6 +1,7 @@
 // Portions Copyright 2019 Jimb Esser (https://github.com/Jimbly/)
 // Released under MIT License: https://opensource.org/licenses/MIT
 
+/* eslint-disable import/order */
 const { serverConfig } = require('./server_config.js');
 const querystring = require('querystring');
 const url = require('url');
@@ -154,9 +155,42 @@ export function respondArray(req, res, next, err, arr) {
   res.end(text);
 }
 
-export function setOriginHeaders(req, res, next) {
+function setOriginHeaders(req, res, next) {
   if (req.headers.origin) {
     res.setHeader('Access-Control-Allow-Origin', req.headers.origin);
   }
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+
   next();
+}
+
+function setCrossOriginHeadersAlways(req, res, next) {
+  let pathname = url.parse(req.url).pathname;
+  if (pathname.endsWith('/') || pathname.endsWith('.html') || pathname.endsWith('.js')) {
+    // For developers: Set as "cross-origin isolated", for access to high resolution timers
+    // Disclaimer: I have no idea what this does, other than allows high resolution timers on Chrome/Firefox
+    res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  }
+  next();
+}
+
+function setCrossOriginHeadersUponRequest(req, res, next) {
+  if (req.query.coop) {
+    setCrossOriginHeadersAlways(req, res, next);
+  } else {
+    next();
+  }
+}
+
+export function setupRequestHeaders(app, { dev, allow_map }) {
+  if (!allow_map) {
+    allowMapFromLocalhostOnly(app);
+  }
+  if (dev) {
+    app.use(setCrossOriginHeadersAlways);
+  } else {
+    app.use(setCrossOriginHeadersUponRequest);
+  }
+  app.use(setOriginHeaders);
 }

@@ -6,6 +6,7 @@ exports.netBuildString = buildString;
 // eslint-disable-next-line no-use-before-define
 exports.netInit = init;
 
+/* eslint-disable import/order */
 const { filewatchStartup } = require('./filewatch.js');
 const packet = require('glov/common/packet.js');
 const subscription_manager = require('./subscription_manager.js');

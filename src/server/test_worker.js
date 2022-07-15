@@ -1,5 +1,5 @@
 const { ChannelWorker } = require('glov/server/channel_worker.js');
-const { handleChat, handleChatGet } = require('glov/server/default_workers.js');
+const { handleChat, handleChatGet } = require('glov/server/chattable_worker.js');
 
 class TestWorker extends ChannelWorker {
   // constructor(channel_server, channel_id, channel_data) {

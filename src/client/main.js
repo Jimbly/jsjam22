@@ -1,4 +1,4 @@
-/*eslint global-require:off*/
+/*eslint global-require:off, import/order:off */
 const local_storage = require('glov/client/local_storage.js');
 local_storage.setStoragePrefix('jsjam22'); // Before requiring anything else that might load from this
 
@@ -2279,7 +2279,7 @@ function stateMenu() {
   let target_rot = 0;
   let walk = transitioner.getTrack('cow_walk');
   let x = COW_X + (1 - walk) * 200;
-  if (input.mouseOver({ x: x - COW_R, y: COW_Y - COW_R, w: COW_R*2, h: COW_R*2})) {
+  if (input.mouseOver({ x: x - COW_R, y: COW_Y - COW_R, w: COW_R*2, h: COW_R*2 })) {
     target_rot = sin(engine.frame_timestamp * 0.005) * 0.2;
   }
   cow_rot = lerp(0.1, cow_rot, target_rot);
@@ -2403,9 +2403,9 @@ export function main() {
     do_borders: true,
     show_fps: false,
     ui_sprites: {
-      button: ['ui/button', [4,14,4], [22]],
-      button_down: ['ui/button_down', [4,14,4], [22]],
-      button_disabled: ['ui/button_disabled', [4,14,4], [22]],
+      button: { name: 'button', ws: [4,14,4], hs: [22] },
+      button_down: { name: 'button_down', ws: [4,14,4], hs: [22] },
+      button_disabled: { name: 'button_disabled', ws: [4,14,4], hs: [22] },
     },
     ui_sounds: {
       // user actions

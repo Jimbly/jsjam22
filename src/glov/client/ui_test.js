@@ -2,17 +2,20 @@
 // Released under MIT License: https://opensource.org/licenses/MIT
 
 const assert = require('assert');
+const { vec4 } = require('glov/common/vmath.js');
 const { colorPicker } = require('./color_picker.js');
 const engine = require('./engine.js');
 const glov_font = require('./font.js');
 const input = require('./input.js');
+const { linkText } = require('./link.js');
 const { scrollAreaCreate } = require('./scroll_area.js');
-const selection_box = require('./selection_box.js');
+const { dropDownCreate, selectionBoxCreate } = require('./selection_box.js');
 const simple_menu = require('./simple_menu.js');
+const { slider } = require('./slider.js');
 const ui = require('./ui.js');
-const { vec4 } = require('glov/common/vmath.js');
+const { getURLBase } = require('./urlhash.js');
 
-const { ceil, random } = Math;
+const { ceil, max, random } = Math;
 
 let demo_menu;
 let demo_menu_up = false;
@@ -23,10 +26,10 @@ let inited;
 let edit_box1;
 let edit_box2;
 let test_select1;
-let test_select2;
-let test_select_large1;
+let test_dropdown;
+let test_dropdown_large;
 let test_scroll_area;
-let slider_value = 1;
+let slider_value = 0.75;
 let test_lines = 10;
 let test_color = vec4(1,0,1,1);
 function init(x, y, column_width) {
@@ -64,28 +67,26 @@ function init(x, y, column_width) {
     glow_color: 0x000000ff,
   });
 
-  test_select1 = selection_box.create({
+  test_select1 = selectionBoxCreate({
     items: ['Apples', 'Bananas', 'Chameleon'],
     z: Z.UI,
     width: column_width - 8,
   });
-  test_select2 = selection_box.create({
-    items: ['Apples', 'Bananas', 'Chameleon'],
-    is_dropdown: true,
+  test_dropdown = dropDownCreate({
+    items: ['Apples', 'Bananas', 'Chameleon', { name: 'Disabled', disabled: true }],
     z: Z.UI,
     width: column_width - 8,
   });
 
   let large_param = {
     items: [],
-    is_dropdown: true,
     z: Z.UI,
     width: column_width - 8,
   };
   for (let ii = 0; ii < 100; ++ii) {
     large_param.items.push(`item${ii}`);
   }
-  test_select_large1 = selection_box.create(large_param);
+  test_dropdown_large = dropDownCreate(large_param);
 
   test_scroll_area = scrollAreaCreate();
 }
@@ -130,7 +131,6 @@ export function run(x, y, z) {
       },
     });
   }
-  y += line_height;
 
   if (edit_box1.run() === edit_box1.SUBMIT) {
     ui.modalDialog({
@@ -145,6 +145,21 @@ export function run(x, y, z) {
     edit_box2.setText('');
   }
 
+  if (ui.buttonText({ x: edit_box2.x + edit_box2.w + pad, y, z, text: '...', w: ui.button_height })) {
+    ui.modalTextEntry({
+      title: 'Type something',
+      edit_text: edit_box2.getText(),
+      buttons: {
+        ok: function (text) {
+          edit_box2.setText(text);
+        },
+        cancel: null,
+      }
+    });
+  }
+
+  y += line_height;
+
   if (ui.buttonText({ x, y, z, text: 'Menu', tooltip: 'Shows a menu' })) {
     demo_menu_up = true;
   }
@@ -154,14 +169,8 @@ export function run(x, y, z) {
     color: test_color,
   });
 
-  y += line_height;
-
-  if (ui.buttonText({ x, y, z, text: 'Disabled', tooltip: 'A disabled button', disabled: true })) {
-    assert(false);
-  }
-
   test_scroll_area.begin({
-    x: x + column_width + 4,
+    x: x + column_width + 4 + line_height,
     y: y + 4,
     z,
     w: 100,
@@ -173,16 +182,30 @@ export function run(x, y, z) {
     `Edit Box Text: ${edit_box1.text}+${edit_box2.text}`) + pad;
   ui.print(font_style, 2, internal_y, z + 1, `Result: ${demo_result}`);
   internal_y += ui.font_height + pad;
-  internal_y += test_select_large1.run({ x: 2, y: internal_y, z: z + 1 }) + pad;
+  ui.print(font_style, 2, internal_y, z + 1, `Dropdown: ${test_dropdown.getSelected().name}`);
+  internal_y += ui.font_height + pad;
+  linkText({ x: 2, y: internal_y, text: 'Ext URL', url: 'https://github.com/jimbly/glovjs' });
+  if (linkText({ x: column_width/2, y: internal_y, text: 'Int URL',
+    internal: true,
+    url: engine.defines.SPOT_DEBUG ? getURLBase() : `${getURLBase()}?D=SPOT_DEBUG` })
+  ) {
+    engine.defines.SPOT_DEBUG = !engine.defines.SPOT_DEBUG;
+  }
+  internal_y += ui.font_height + pad;
+  internal_y += test_dropdown_large.run({ x: 2, y: internal_y, z: z + 1 }) + pad;
+  if (ui.buttonText({ x: 2, y: internal_y, z, text: 'Disabled', tooltip: 'A disabled button', disabled: true })) {
+    assert(false);
+  }
+  internal_y += ui.button_height + pad;
   for (let ii = 0; ii < test_lines; ++ii) {
     ui.print(font_style, 2, internal_y, z + 1, `Line #${ii}`);
     internal_y += ui.font_height + pad;
   }
-  if (ui.buttonText({ x: 2, y: internal_y, z: z + 1, text: 'Add Line' })) {
+  if (ui.buttonText({ x: 2, y: internal_y, z: z + 1, text: 'Add Line', key: 'add_line' })) {
     ++test_lines;
   }
   internal_y += ui.button_height + pad;
-  if (ui.buttonText({ x: 2, y: internal_y, z: z + 1, text: 'Remove Line' })) {
+  if (ui.buttonText({ x: 2, y: internal_y, z: z + 1, text: 'Remove Line', key: 'remove_line' })) {
     --test_lines;
   }
   internal_y += ui.button_height + pad;
@@ -193,9 +216,10 @@ export function run(x, y, z) {
   y += line_height;
 
   y += test_select1.run({ x, y, z });
-  y += test_select2.run({ x, y, z });
+  y += test_dropdown.run({ x, y, z });
 
-  slider_value = ui.slider(slider_value, {
+  y = max(y, test_scroll_area.y + test_scroll_area.h + pad);
+  slider_value = slider(slider_value, {
     x, y, z,
     min: 0,
     max: 2,

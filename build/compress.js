@@ -1,6 +1,6 @@
+const { brotliCompress, gzip } = require('zlib');
 const gb = require('glov-build');
 const micromatch = require('micromatch');
-const { brotliCompress, gzip } = require('zlib');
 
 function gbif(globs, fn) {
   return function (job, done) {

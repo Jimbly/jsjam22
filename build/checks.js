@@ -1,6 +1,6 @@
-const args = require('minimist')(process.argv.slice(2));
 const fs = require('fs');
 const JSON5 = require('json5');
+const args = require('minimist')(process.argv.slice(2));
 
 function requireVersion(dep, required) {
   let ver;
@@ -8,7 +8,7 @@ function requireVersion(dep, required) {
     ver = process.versions.node;
   } else {
     try {
-      // eslint-disable-next-line global-require
+      // eslint-disable-next-line global-require, import/no-dynamic-require
       ver = require(`${dep}/package.json`).version;
     } catch (e) {
       return `"${dep}": missing`;
@@ -73,10 +73,11 @@ module.exports = function (filename) {
 
   requireVersions({
     'nodejs': '16.13.0',
-    'glov-build': '0.0.32',
+    'glov-build': '0.0.35',
     'glov-build-browserify': '0.0.4',
     'glov-build-concat': '0.0.8',
     'glov-build-preresolve': '0.2.0',
+    '@jimbly/howler': '0.0.9',
     '@jimbly/babel-plugin-transform-modules-simple-commonjs': '0.0.3',
   });
 };

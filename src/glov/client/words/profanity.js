@@ -3,6 +3,7 @@
 // Originally from Splody, used with permission
 /* eslint no-multi-spaces:off, array-bracket-spacing:off */
 
+/* eslint-disable import/order */
 const { mashString } = require('glov/common/rand_alea.js');
 const { randFastCreate } = require('glov/client/rand_fast.js');
 const { profanityFilterCommon, profanityCommonStartup } = require('glov/common/words/profanity_common.js');

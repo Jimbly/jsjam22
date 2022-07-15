@@ -1,6 +1,7 @@
 // Portions Copyright 2019 Jimb Esser (https://github.com/Jimbly/)
 // Released under MIT License: https://opensource.org/licenses/MIT
 
+/* eslint-disable import/order */
 const assert = require('assert');
 const {
   chunkedReceiverCleanup,
@@ -12,8 +13,9 @@ const {
 } = require('glov/common/chunked_send.js');
 const client_worker = require('./client_worker.js');
 const { channelServerPak, channelServerSend, quietMessage } = require('./channel_server.js');
+const crypto = require('crypto');
 const { regex_valid_username } = require('./default_workers.js');
-const { logSubscribeClient, logUnsubscribeClient } = require('./log.js');
+const { logDumpJSON, logSubscribeClient, logUnsubscribeClient } = require('./log.js');
 const fs = require('fs');
 const { isPacket } = require('glov/common/packet.js');
 const { logdata, merge } = require('glov/common/util.js');
@@ -116,6 +118,11 @@ function onSetChannelData(client, pak, resp_func) {
 
   if (!client_channel.isSubscribedTo(channel_id)) {
     pak.pool();
+    if (client_channel.recentlyForceUnsubbed(channel_id)) {
+      // Silently ignore, client will assert on this but we were forcibly kicked from
+      //   this channel, so it's not a client bug.
+      return void resp_func();
+    }
     return void resp_func(`Client is not on channel ${channel_id}`);
   }
 
@@ -190,8 +197,15 @@ function onChannelMsg(client, data, resp_func) {
         payload.pool();
       }
       if (!resp_func.expecting_response) {
-        client.logCtx('warn', `Unhandled error "Client is not on channel ${channel_id}" sent to client in response to ${
-          msg} ${is_packet ? '(pak)' : logdata(payload)}`);
+        if (client_channel.recentlyForceUnsubbed(channel_id)) {
+          // Silently ignore, client will assert on this but we were forcibly kicked from
+          //   this channel, so it's not a client bug.
+          return void resp_func();
+        } else {
+          client.logCtx('warn', 'Unhandled error "Client is not on channel' +
+            ` ${channel_id}" sent to client in response to ${msg}`+
+            ` ${is_packet ? '(pak)' : logdata(payload)}`);
+        }
       }
       return void resp_func(`Client is not on channel ${channel_id}`);
     }
@@ -790,6 +804,34 @@ function onPerfFetch(client, data, resp_func) {
   client_channel.sendChannelMessage(channel_id, 'perf_fetch', { fields }, resp_func);
 }
 
+function onProfile(client, data, resp_func) {
+  let client_channel = client.client_channel;
+  if (typeof data !== 'string') {
+    return void resp_func('ERR_INVALID_DATA');
+  }
+  try {
+    data = JSON.parse(data);
+  } catch (e) {
+    return void resp_func('ERR_INVALID_DATA');
+  }
+  // Generate a (likely unique) random ID to reference this profile by
+  crypto.randomFill(Buffer.alloc(9), (err, buf) => {
+    if (err) {
+      throw err;
+    }
+    let uid = buf.toString('base64');
+    let log_data = {
+      ...data,
+      ...client_channel.ids,
+      ...client.crash_data,
+      uid,
+    };
+    let file = logDumpJSON('profile', log_data, 'json');
+    client_channel.logCtx('info', 'Profile saved', { uid, file });
+    resp_func(null, { id: uid });
+  });
+}
+
 function onCmdParseAuto(client, pak, resp_func) {
   let cmd = pak.readString();
   let { client_channel } = client;
@@ -849,6 +891,7 @@ export function init(channel_server_in) {
   ws_server.onMsg('cmd_parse_auto', onCmdParseAuto);
   ws_server.onMsg('cmd_parse_list_client', onCmdParseListClient);
   ws_server.onMsg('perf_fetch', onPerfFetch);
+  ws_server.onMsg('profile', onProfile);
 
   ws_server.onMsg('upload_start', uploadOnStart);
   ws_server.onMsg('upload_chunk', uploadOnChunk);

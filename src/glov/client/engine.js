@@ -2,10 +2,13 @@
 // Released under MIT License: https://opensource.org/licenses/MIT
 /* eslint-env browser */
 
+/* eslint-disable import/order */
 require('./bootstrap.js'); // Just in case it's not in app.js
 
 const client_config = require('./client_config.js');
 export let DEBUG = client_config.MODE_DEVELOPMENT;
+
+let startup_funcs = [];
 
 exports.require = require; // For browser console debugging
 
@@ -38,12 +41,16 @@ const mat4Perspective = require('gl-mat4/perspective');
 const { asin, cos, floor, min, max, PI, round, sin, sqrt } = Math;
 const models = require('./models.js');
 const perf = require('./perf.js');
+const { profilerFrameStart } = require('./profiler.js');
+const { profilerUIStartup } = require('./profiler_ui.js');
 const { perfCounterTick } = require('glov/common/perfcounters.js');
 const settings = require('./settings.js');
 const shaders = require('./shaders.js');
 const { shaderDebugUIStartup } = require('./shader_debug_ui.js');
 const { soundLoading, soundStartup, soundTick, soundPause, soundResume } = require('./sound.js');
+const { spotEndInput } = require('./spot.js');
 const sprites = require('./sprites.js');
+const { blendModeReset } = sprites;
 const textures = require('./textures.js');
 const { texturesTick } = textures;
 const glov_transition = require('./transition.js');
@@ -376,6 +383,14 @@ export function postTick(opts) {
   post_tick.push(opts);
 }
 
+let pre_sprite_render = null;
+export function preSpriteRender(fn) {
+  if (!pre_sprite_render) {
+    pre_sprite_render = [];
+  }
+  pre_sprite_render.push(fn);
+}
+
 let post_render = null;
 export function postRender(fn) {
   if (!post_render) {
@@ -447,6 +462,7 @@ let safearea_ignore_bottom = false;
 let safearea_values = [0,0,0,0];
 let last_safearea_values = [0,0,0,0];
 function checkResize() {
+  profilerStart('checkResize');
   // use VisualViewport on at least iOS Safari - deal with tabs and keyboard
   //   shrinking the viewport without changing the window height
   let vv = window.visualViewport || {};
@@ -509,6 +525,7 @@ function checkResize() {
     // force scroll to top
     window.scroll(0,0);
   }
+  profilerStop('checkResize');
 }
 
 export let viewport = vec4(0,0,1,1);
@@ -517,13 +534,13 @@ export function setViewport(xywh) {
   gl.viewport(xywh[0], xywh[1], xywh[2], xywh[3]);
 }
 
-let frame_requested = false;
-function requestFrame() {
-  if (frame_requested) {
+let frames_requested = 0;
+function requestFrame(user_time) {
+  let max_fps = settings.max_fps;
+  let desired_frames = (max_fps >= 250) ? 10 : 1;
+  if (frames_requested >= desired_frames) {
     return;
   }
-  frame_requested = true;
-  let max_fps = settings.max_fps;
   if (defines.SLOWLOAD && is_loading) {
     // Safari on CrossBrowserTesting needs this in order to have some time to load/decode audio data
     // TODO: Instead, generally, if loading, compare last_tick_cpu vs dt, and if
@@ -531,10 +548,21 @@ function requestFrame() {
     //   loads (textures, sounds, models, NOT user code), delay so that we are.
     max_fps = 2;
   }
-  if (max_fps) {
+  if (desired_frames > 1) {
+    // Ensure we have at least that many frames queued up at any point in time, so they
+    // can fire at less than the normal 4ms browser delay of setTimeout()
+    while (frames_requested < desired_frames) {
+      // eslint-disable-next-line no-use-before-define
+      setTimeout(tick, 1);
+      frames_requested++;
+    }
+  } else if (max_fps) {
+    let desired_delay = max(0, round(1000 / max_fps - (user_time || 0)));
+    frames_requested++;
     // eslint-disable-next-line no-use-before-define
-    setTimeout(tick, round(1000 / max_fps));
+    setTimeout(tick, desired_delay);
   } else {
+    frames_requested++;
     // eslint-disable-next-line no-use-before-define
     requestAnimationFrame(tick);
   }
@@ -584,7 +612,7 @@ export function start3DRendering(opts) {
     had_render_scale_3d_this_frame = true;
     effectsPassAdd();
   }
-  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  blendModeReset(true);
   gl.enable(gl.BLEND);
   gl.enable(gl.DEPTH_TEST);
   gl.depthMask(true);
@@ -628,7 +656,7 @@ function renderScaleFinish() {
 
 export function startSpriteRendering() {
   gl.disable(gl.CULL_FACE);
-  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  blendModeReset(true);
   gl.enable(gl.BLEND);
   gl.disable(gl.DEPTH_TEST);
   gl.depthMask(false);
@@ -666,13 +694,16 @@ export function fixNatives(is_startup) {
 function resetState() {
   // Only geom.geomResetState appears to have been strictly needed to work around
   //  a bug on Chrome 71, but doing the rest of this to be safe.
+  profilerStart('resetState');
+  profilerStart('textures');
   textures.texturesResetState();
+  profilerStopStart('shaders');
   shaders.shadersResetState();
+  profilerStopStart('geom;gl');
   geom.geomResetState();
 
   // These should already be true:
-  // gl.blendFunc(gl.ONE, gl.ONE);
-  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  blendModeReset(true);
   // gl.disable(gl.BLEND);
   gl.enable(gl.BLEND);
   // gl.disable(gl.DEPTH_TEST);
@@ -688,6 +719,8 @@ function resetState() {
   // gl.cullFace(gl.FRONT);
   gl.cullFace(gl.BACK);
   gl.viewport(0, 0, width, height);
+  profilerStop();
+  profilerStop('resetState');
 }
 
 export const hrnow = window.performance ? window.performance.now.bind(window.performance) : Date.now.bind(Date);
@@ -699,7 +732,10 @@ export function isInBackground() {
 
 let last_tick = 0;
 function tick(timestamp) {
-  frame_requested = false;
+  profilerFrameStart();
+  profilerStart('tick');
+  profilerStart('top');
+  frames_requested--;
   // if (timestamp < 1e12) { // high resolution timer
   //   this ends up being a value way back in time, relative to what hrnow() returns,
   //   and even back in time relative to input events already dispatched,
@@ -760,7 +796,8 @@ function tick(timestamp) {
       }
     }
     requestFrame();
-    return;
+    profilerStop();
+    return profilerStop('tick');
   }
   in_background = false;
   soundResume();
@@ -788,6 +825,8 @@ function tick(timestamp) {
   camera2d.tickCamera2D();
   glov_transition.render(dt);
   camera2d.setAspectFixed(game_width, game_height);
+
+  profilerStopStart('mid');
 
   soundTick(dt);
   input.tickInput();
@@ -819,6 +858,7 @@ function tick(timestamp) {
 
   perf.draw();
 
+  profilerStopStart('app_state');
   for (let ii = 0; ii < app_tick_functions.length; ++ii) {
     app_tick_functions[ii](dt);
   }
@@ -826,6 +866,8 @@ function tick(timestamp) {
     app_state(dt);
   }
 
+  profilerStopStart('bottom');
+  spotEndInput();
   // glov_particles.tick(dt); // *after* app_tick, so newly added/killed particles can be queued into the draw list
 
   if (had_3d_this_frame) {
@@ -853,6 +895,10 @@ function tick(timestamp) {
         need_depth: false,
       });
     }
+  }
+
+  if (pre_sprite_render) {
+    callEach(pre_sprite_render, pre_sprite_render = null);
   }
 
   startSpriteRendering();
@@ -896,7 +942,9 @@ function tick(timestamp) {
 
   last_tick_cpu = hrnow() - now;
   fpsgraph.history[(fpsgraph.index % PERF_HISTORY_SIZE) * 2 + 0] = last_tick_cpu;
-  requestFrame();
+  requestFrame(hrnow() - hrtime);
+  profilerStop('bottom');
+  return profilerStop('tick');
 }
 
 function periodiclyRequestFrame() {
@@ -933,6 +981,10 @@ export function setFonts(new_font, title_font) {
   glov_ui.setFonts(new_font, title_font);
 }
 
+export function engineStartupFunc(func) {
+  startup_funcs.push(func);
+}
+
 export function startup(params) {
   fixNatives(true);
 
@@ -946,7 +998,7 @@ export function startup(params) {
     };
   }
 
-  if (DEBUG) {
+  if (DEBUG && !window.spector) {
     // Add check to catch common error of `const FOO=10; for (let i=0; i < FOO.length; i++) {}`
     // eslint-disable-next-line no-extend-native
     Object.defineProperty(Number.prototype, 'length', {
@@ -1071,6 +1123,7 @@ export function startup(params) {
   if (is_pixely) {
     textures.defaultFilters(gl.NEAREST, gl.NEAREST);
     settings.runTimeDefault('render_scale_mode', 1);
+    params.ui_sprites = defaults(params.ui_sprites || {}, glov_ui.ui_sprites_pixely);
   } else {
     textures.defaultFilters(gl.LINEAR_MIPMAP_LINEAR, gl.LINEAR);
   }
@@ -1101,6 +1154,9 @@ export function startup(params) {
 
   buildUIStartup();
   shaderDebugUIStartup();
+  profilerUIStartup();
+
+  callEach(startup_funcs, startup_funcs = null);
 
   camera2d.setAspectFixed(game_width, game_height);
 

@@ -10,7 +10,7 @@ export function packetLogInit(receiver) {
 }
 
 export function packetLog(source, pak, buf_offs, msg) {
-  let receiver = this; // eslint-disable-line no-invalid-this
+  let receiver = this; // eslint-disable-line @typescript-eslint/no-invalid-this
   let ple = receiver.pkt_log[receiver.pkt_log_idx];
   if (!ple) {
     ple = receiver.pkt_log[receiver.pkt_log_idx] = { data: Buffer.alloc(PKT_LOG_BUF_SIZE) };

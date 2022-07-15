@@ -1,3 +1,4 @@
+/* eslint-disable import/order */
 const assert = require('assert');
 const { filewatchOn, filewatchTriggerChange } = require('./filewatch.js');
 const urlhash = require('./urlhash.js');
@@ -69,12 +70,12 @@ export function webFSExists(filename) {
   return Boolean(fs[filename]);
 }
 
-// Don't report on files we know are loaded dynamically, and are small
-const report_ignore_regex = /\.(fp|vp|vm)$/;
-export function webFSReportUnused() {
+export function webFSReportUnused(ignore_regex) {
+  // Don't report on files we know are loaded dynamically, and are small
+  ignore_regex = ignore_regex || /\.(fp|vp)$/;
   let tot_size = 0;
   for (let filename in fs) {
-    if (!used[filename] && !filename.match(report_ignore_regex)) {
+    if (!used[filename] && !filename.match(ignore_regex)) {
       console.warn(`WebFS file bundled but unreferenced: ${filename}`);
       tot_size += fs[filename][0];
     }

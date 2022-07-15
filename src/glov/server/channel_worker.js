@@ -1,6 +1,9 @@
 // Portions Copyright 2019 Jimb Esser (https://github.com/Jimbly/)
 // Released under MIT License: https://opensource.org/licenses/MIT
 
+/* eslint-disable import/order */
+require('./must_import.js')('channel_server.js', __filename);
+
 export let cwstats = { msgs: 0, bytes: 0 };
 export let ERR_QUIET = 'ERR_QUIET';
 
@@ -479,7 +482,8 @@ export class ChannelWorker {
   }
   unsubscribeOther(other_channel_id) {
     // Note: subscribe count will already be 0 if we called .subscribeOther and
-    // it failed, and then we're trying to clean up.
+    // it failed, and then we're trying to clean up.  Also: unreliable client
+    // initiated request, such as after a force_unsub message, or a bug/timing issue.
     assert(this.channel_type === 'client' || this.subscribe_counts[other_channel_id] || this.had_subscribe_error);
     if (!this.subscribe_counts[other_channel_id]) {
       this.log(`->${other_channel_id}: unsubscribe - failed: not subscribed`);
@@ -1165,6 +1169,17 @@ export class ChannelWorker {
     logEx(this.ctxSrc(src), 'error', `${this.channel_id}:`, ...args);
   }
 
+  // Wraps `resp_func` so that it logs upon completion or failure
+  loggedResponse(source, resp_func, log_msg) {
+    return (err, payload) => {
+      if (err) {
+        this.logSrc(source, `${log_msg}: failed: ${err}`);
+      } else {
+        this.logSrc(source, `${log_msg}: success`);
+      }
+      resp_func(err, payload);
+    };
+  }
 
   // Default error handler
   handleError(src, data, resp_func) {

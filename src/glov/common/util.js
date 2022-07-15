@@ -368,6 +368,18 @@ export function secondsSince2020() {
   return floor(Date.now() / 1000) - 1577836800;
 }
 
+export function dateToSafeLocaleString(date) {
+  // Uses toString as a fallback since some browsers do not properly detect default locale.
+  let date_text;
+  try {
+    date_text = date.toLocaleString();
+  } catch (e) {
+    console.error(e, '(Using toString as fallback)');
+    date_text = date.toString();
+  }
+  return date_text;
+}
+
 let sw = {}; // Stop words map
 sw.am = sw.an = sw.and = sw.as = sw.at = sw.be = sw.by = sw.el =
   sw.for = sw.in = sw.is = sw.la = sw.las = sw.los = sw.of = sw.on =
@@ -421,4 +433,13 @@ export function errorString(e) { // function errorString(e : Error | object | st
   }
   msg = msg.slice(0, 600); // Not too huge
   return msg;
+}
+
+export function deprecate(exports, field, replacement) {
+  Object.defineProperty(exports, field, {
+    get: function () {
+      assert(false, `${field} is deprecated, use ${replacement} instead`);
+      return undefined;
+    }
+  });
 }

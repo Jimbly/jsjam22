@@ -1,6 +1,7 @@
 // Portions Copyright 2019 Jimb Esser (https://github.com/Jimbly/)
 // Released under MIT License: https://opensource.org/licenses/MIT
 
+/* eslint-disable import/order */
 const argv = require('minimist')(process.argv.slice(2));
 const assert = require('assert');
 const fs = require('fs');
@@ -52,7 +53,7 @@ export function getUID() {
   return ++last_uid;
 }
 
-export function dumpJSON(prefix, data, ext) {
+export function logDumpJSON(prefix, data, ext) {
   if (dumpToFile) {
     let filename = path.join(log_dir, `${prefix}-${pid}-${++last_uid}.${ext || 'log'}`);
     fs.writeFile(filename, JSON.stringify(data), function (err) {
@@ -63,8 +64,9 @@ export function dumpJSON(prefix, data, ext) {
     return filename;
   } else {
     let crash_id = `${prefix}-${++last_uid}`;
-    logger.log('error', crash_id, data);
-    return `GKE:${crash_id}`;
+    let level = prefix === 'crash' || prefix === 'error' ? 'error' : 'warn';
+    logger.log(level, crash_id, data);
+    return `LOG:${crash_id}`;
   }
 }
 

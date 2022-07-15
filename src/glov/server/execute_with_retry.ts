@@ -1,6 +1,7 @@
+import { perfCounterAdd } from 'glov/common/perfcounters';
+import { ErrorCallback } from 'glov/common/types';
+
 const { floor, min, random } = Math;
-import { ErrorCallback } from 'glov/common/types.js';
-import { perfCounterAdd } from 'glov/common/perfcounters.js';
 
 /**
  * Parameters controlling the executeWithRetry function's behaviour

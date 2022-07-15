@@ -205,6 +205,26 @@ export function setNormalized() {
   set(0, 0, 1, 1, true);
 }
 
+// Sets virtual viewport equal to (DPI-aware) screen pixels
+//   (generally a bad idea, will not scale well without lots of app work)
+export function setScreen() {
+  if (render_width) {
+    set(0, 0, render_width, render_height);
+  } else {
+    set(0, 0, safeScreenWidth() / engine.dom_to_canvas_ratio, safeScreenHeight() / engine.dom_to_canvas_ratio);
+  }
+}
+
+// Sets virtual viewport equal to DOM coordinates, for debugging input events/etc
+export function setDOMMapped() {
+  if (render_width) {
+    set(render_offset_x, render_offset_y_top,
+      screen_width - render_offset_x, screen_height - render_offset_y_top, true);
+  } else {
+    set(0, 0, screen_width / engine.dom_to_canvas_ratio, screen_height / engine.dom_to_canvas_ratio, true);
+  }
+}
+
 export function x0Real() {
   return data[0];
 }

@@ -1,8 +1,8 @@
 const assert = require('assert');
-const gb = require('glov-build');
-const { callbackify } = gb;
-const path = require('path');
 const fs = require('fs');
+const path = require('path');
+const gb = require('glov-build');
+const { callbackify } = require('glov-build');
 
 module.exports = function (opts) {
   let { input, name, name_files } = opts;
@@ -110,6 +110,7 @@ module.exports = function (opts) {
   gb.task({
     name: name_files,
     type: gb.SINGLE,
+    async: gb.ASYNC_FORK,
     input,
     init: eslintFilesTaskInit,
     func: eslintFilesTask,
@@ -121,5 +122,7 @@ module.exports = function (opts) {
     input: `${name_files}:**`,
     init: eslintFormatterTaskInit,
     func: eslintFormatterTask,
+    async: gb.ASYNC_FORK,
+    async_task: name_files,
   };
 };

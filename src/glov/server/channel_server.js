@@ -1,6 +1,9 @@
 // Portions Copyright 2019 Jimb Esser (https://github.com/Jimbly/)
 // Released under MIT License: https://opensource.org/licenses/MIT
 
+/* eslint-disable import/order */
+require('./must_import.js').imported('channel_server.js');
+
 export const LOAD_REPORT_INTERVAL = 15000;
 const EXCHANGE_PING_INTERVAL = 1000; // Affects `exchange_pings`, should be 1s
 export const PAK_HINT_NEWSEQ = 0x80000000;
@@ -18,7 +21,7 @@ const default_workers = require('./default_workers.js');
 const { ERR_NOT_FOUND } = require('./exchange.js');
 const fs = require('fs');
 const log = require('./log.js');
-const { logEx, logDowngradeErrors } = log;
+const { logEx, logDowngradeErrors, logDumpJSON } = log;
 const { min, round } = Math;
 const metrics = require('./metrics.js');
 const os = require('os');
@@ -228,7 +231,7 @@ function channelServerSendFinish(pak, err, resp_func) {
 }
 
 function channelServerPakSend(err, resp_func) {
-  let pak = this; //eslint-disable-line no-invalid-this
+  let pak = this; // eslint-disable-line @typescript-eslint/no-invalid-this
   if (typeof err === 'function' && !resp_func) {
     resp_func = err;
     err = null;
@@ -236,10 +239,14 @@ function channelServerPakSend(err, resp_func) {
   channelServerSendFinish(pak, err, resp_func);
 }
 
+let quiet_messages = Object.create(null);
+export function quietMessagesSet(list) {
+  for (let ii = 0; ii < list.length; ++ii) {
+    quiet_messages[list[ii]] = true;
+  }
+}
 export function quietMessage(msg, payload) {
-  // FRVR - maybe generalize this?
-  return msg === 'set_user' && payload && payload.key === 'pos' ||
-    msg === 'vd_get' || msg === 'claim' || msg === 'dig';
+  return msg === 'set_user' && payload && payload.key === 'pos' || quiet_messages[msg];
 }
 
 // source is a ChannelWorker
@@ -378,7 +385,8 @@ function osFreeMem(cb) {
   });
 }
 
-class ChannelServer {
+export class ChannelServer {
+  // TODO: When migrating this class to typescript, the constructor should be made private or protected, not public
   constructor() {
     this.channel_types = {};
     this.local_channels = {};
@@ -976,6 +984,18 @@ class ChannelServer {
     this.last_tick_time = Date.now() - now;
   }
 
+  /*
+    options: {
+      autocreate: if true, workers will be created whenever a message is attempted to be delivered
+      subid_regex: for validating if a message can even potentially be sent to a given channel
+      cmds: array of cmd_parse definitions
+      handlers: map of message to handler functions (invoked with the worker as `this`)
+        these handlers are only called in response to server->server messages
+      client_handlers: like `handlers`, but allow direct client->server messages
+      filters: map of message to a function that is called before passing a message off to it's handler function
+        useful for low-level messages that are handled internally ("apply_channel_data")
+    }
+   */
   registerChannelWorker(channel_type, ctor, options) {
     options = options || {};
     assert(!this.channel_types[channel_type]);
@@ -1141,7 +1161,7 @@ class ChannelServer {
       crash_dump.client_data = client.crash_data;
     }
     addPacketLog(this.ws_server, 'ws_pkt_log');
-    let dump_file = log.dumpJSON('crash', crash_dump, 'json');
+    let dump_file = logDumpJSON('crash', crash_dump, 'json');
     console.error(`  Saving dump to ${dump_file}.`);
     this.csworker.sendChannelMessage('channel_server', 'chat_broadcast', {
       sysadmin: true,

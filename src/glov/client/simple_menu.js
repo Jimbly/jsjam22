@@ -10,30 +10,31 @@
 exports.createSimpleMenu = create;
 
 const assert = require('assert');
+const { clamp } = require('glov/common/util.js');
+const { vec4 } = require('glov/common/vmath.js');
 const camera2d = require('./camera2d.js');
 const engine = require('./engine.js');
-const input = require('./input.js');
-const selection_box = require('./selection_box.js');
+const {
+  KEYS,
+  PAD,
+  keyDown,
+  keyDownEdge,
+  padButtonDownEdge,
+} = require('./input.js');
+const { selectionBoxCreate } = require('./selection_box.js');
+const { slider, sliderIsFocused } = require('./slider.js');
 const ui = require('./ui.js');
-const { vec4 } = require('glov/common/vmath.js');
-const { clamp } = require('glov/common/util.js');
-
-const { KEYS, PAD } = input;
 
 const color101010C8 = vec4(0x10/255, 0x10/255, 0x10/255, 0xC8/255);
 
 class GlovSimpleMenu {
   constructor(params) {
     params = params || {};
-    this.sel_box = selection_box.create(params);
+    this.sel_box = selectionBoxCreate(params);
     this.edit_index = -1;
 
     // Output members
     this.selected = -1; // actually selected/acted on, not just current highlight, like this.sel_box.selected
-  }
-
-  focus() {
-    ui.focusSteal(this.sel_box);
   }
 
   execItem(index, delta) {
@@ -52,7 +53,7 @@ class GlovSimpleMenu {
         this.internal.edit_index = index;
         // glovInputReleaseAll();
       } else if (menu_item.value !== null) {
-        if (input.keyDown(KEYS.SHIFT) && !force) {
+        if (keyDown(KEYS.SHIFT) && !force) {
           delta = -1;
         }
         menu_item.value += delta * menu_item.value_inc;
@@ -84,9 +85,10 @@ class GlovSimpleMenu {
   run(params) {
     let { sel_box } = this;
     sel_box.applyParams(params); // Apply new list of items, positions, etc
+    sel_box.items[0].auto_focus = true;
 
     const { items, x, z } = sel_box;
-    const y0 = sel_box.y + 4;
+    const y0 = sel_box.y;
     let exit_index = -1;
     for (let i = 0; i < items.length; ++i) {
       if (items[i].exit) {
@@ -116,13 +118,14 @@ class GlovSimpleMenu {
     }
     sel_box.disabled = !selbox_enabled;
 
-    // Do all sliders, plus-minus-es - needs
+    // Do all sliders, plus-minus-es
     let display = sel_box.display;
+    sel_box.show_as_focused = -1;
     for (let ii = 0; ii < items.length; ii++) {
       let menu_item = items[ii];
       if (menu_item.slider) {
-        // slider.no_notches = true;
-        // slider.sound_release = this.sound_accept;
+        // slider_no_notches = true;
+        // slider_sound_release = this.sound_accept;
         let slider_width = 160;
         let slider_x = x + sel_box.width - slider_width - 4 - display.xpad;
         let color = display.style_default.color_vec4;
@@ -132,7 +135,7 @@ class GlovSimpleMenu {
         if (menu_item.disabled) {
           color = display.style_disabled.color;
         }
-        menu_item.value = ui.slider(menu_item.value, {
+        menu_item.value = slider(menu_item.value, {
           x: slider_x,
           y: y0 + ii * sel_box.entry_height,
           z: z + 3,
@@ -143,13 +146,11 @@ class GlovSimpleMenu {
           color,
           min: menu_item.value_min,
           max: menu_item.value_max,
+          pad_focusable: false,
         });
-        if (ui.slider_rollover || ui.slider_dragging) {
+        if (sliderIsFocused()) {
           // expect our row to be selected
-          if (sel_box.selected !== ii) {
-            sel_box.selected = ii;
-            ui.playUISound('rollover');
-          }
+          sel_box.show_as_focused = ii;
         }
       } else if (menu_item.plus_minus) {
         assert(typeof menu_item.value === 'number', 'plus_minus items require a numerical value');
@@ -160,7 +161,7 @@ class GlovSimpleMenu {
         let delta = 0;
         // if (!glovMasterControllerActive()) { // Don't show buttons if using a controller / no mouse
         if (ui.buttonText({
-          no_focus: true,
+          pad_focusable: false,
           x: button_x,
           y: y0 + ii * sel_box.entry_height,
           z: z + 3,
@@ -172,7 +173,7 @@ class GlovSimpleMenu {
         }
         let minus_over = ui.button_mouseover;
         if (ui.buttonText({
-          no_focus: true,
+          pad_focusable: false,
           x: button_x + pad + button_width,
           y: y0 + ii * sel_box.entry_height,
           z: z + 3,
@@ -190,10 +191,7 @@ class GlovSimpleMenu {
         }
         if (minus_over || plus_over) {
           // expect our row to be selected
-          if (sel_box.selected !== ii) {
-            sel_box.selected = ii;
-            ui.playUISound('rollover');
-          }
+          sel_box.show_as_focused = ii;
         }
       }
     }
@@ -203,39 +201,14 @@ class GlovSimpleMenu {
 
     let selected=-1;
     if (exit_index !== -1 && (
-      input.keyDownEdge(KEYS.ESC) ||
-      !items[exit_index].no_controller_exit && input.padButtonDownEdge(PAD.CANCEL)
+      keyDownEdge(KEYS.ESC) ||
+      !items[exit_index].no_controller_exit && padButtonDownEdge(PAD.CANCEL)
     )) {
       this.execItem(exit_index, 1);
       selected = exit_index;
     }
-    // Only allow left/right to "select" a menu option if it's a toggle/increment
-    // kind of menu option, otherwise this just feels weird
-    let allow_left_right = items[sel_box.selected].value !== null;
-    if (sel_box.was_clicked || sel_box.is_focused && (
-      input.keyDownEdge(KEYS.SPACE) ||
-      input.keyDownEdge(KEYS.ENTER) ||
-      input.padButtonDownEdge(PAD.SELECT))
-    ) {
+    if (sel_box.was_clicked) {
       this.execItem(sel_box.selected, sel_box.was_right_clicked ? -1 : 1);
-      selected = sel_box.selected;
-    }
-    if (sel_box.is_focused && allow_left_right && (
-      input.keyDownEdge(KEYS.RIGHT) ||
-      input.keyDownEdge(KEYS.D) ||
-      input.padButtonDownEdge(PAD.RIGHT))
-    ) {
-      this.execItem(sel_box.selected, 2);
-      selected = sel_box.selected;
-    }
-    if (sel_box.wasRightClicked || sel_box.is_focused && allow_left_right && (
-      // This was UpHit before, some problem with it triggering an up on the next screen?  Should supress the next up
-      // events after eating a down for UI?
-      input.keyDownEdge(KEYS.LEFT) ||
-      input.keyDownEdge(KEYS.A) ||
-      input.padButtonDownEdge(PAD.LEFT))
-    ) {
-      this.execItem(sel_box.selected, -1);
       selected = sel_box.selected;
     }
     this.selected = selected;

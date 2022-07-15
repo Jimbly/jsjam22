@@ -3,6 +3,7 @@
 
 export let perf_mem_counters = {};
 
+/* eslint-disable import/order */
 const engine = require('./engine.js');
 let metrics = [];
 export function addMetric(metric, first) {
@@ -29,6 +30,7 @@ const input = require('./input.js');
 const { max } = Math;
 const { netClient, netClientId, netDisconnected } = require('./net.js');
 const { perfCounterHistory } = require('glov/common/perfcounters.js');
+const { profilerUI } = require('./profiler_ui.js');
 const settings = require('./settings.js');
 const ui = require('./ui.js');
 const { vec4, v3copy } = require('glov/common/vmath.js');
@@ -127,7 +129,7 @@ const UNIT_COUNT = [
   [1000*1000, 'm'],
   [1000*1000*1000, 'g'],
 ];
-function friendlyBytes(bytes) {
+export function friendlyBytes(bytes) {
   return friendlyUnit(UNIT_BYTES, bytes);
 }
 function friendlyCount(count) {
@@ -155,10 +157,10 @@ function showMetric(y, metric) {
         value = value.value;
         style = glov_font.styleAlpha(fps_style, alpha);
       }
-      let label_w = font.drawSizedAligned(style, x, y, Z.FPSMETER + 1, line_height,
+      let label_w = font.drawSizedAligned(style, x, y, Z.FPSMETER + 3, line_height,
         glov_font.ALIGN.HRIGHT, 0, 0, label);
       max_label_w = max(max_label_w, label_w);
-      font.drawSizedAligned(style, x, y, Z.FPSMETER + 1, line_height,
+      font.drawSizedAligned(style, x, y, Z.FPSMETER + 3, line_height,
         glov_font.ALIGN.HFIT, METRIC_VALUE_WIDTH, 0, value);
       y += line_height;
       drew_any = true;
@@ -203,7 +205,7 @@ function showMetric(y, metric) {
     bg_fade[3] = bg[3] * alpha;
     bg = v3copy(bg_fade, bg);
   }
-  ui.drawRect(pos_param.x, pos_param.y, pos_param.x + pos_param.w, y, Z.FPSMETER, bg);
+  ui.drawRect(pos_param.x, pos_param.y, pos_param.x + pos_param.w, y, Z.FPSMETER+2, bg);
   return y;
 }
 
@@ -344,18 +346,36 @@ function perfMemObjToLines(out, obj, prefix) {
   }
 }
 
+let graph_override = null;
+// `override` is like a `metric` passed to addMetric.  Contains:
+// history_size
+// num_lines
+// data: { history[history_size * num_lines], index }
+// line_scale_top
+// bars_stack : boolean
+// colors : vec4[]
+export function perfGraphOverride(override) {
+  graph_override = override;
+}
+
 export function draw() {
+  camera2d.push();
+  profilerUI();
   camera2d.setAspectFixed(engine.game_width, engine.game_height);
   if (settings.show_metrics) {
     let y = camera2d.y0Real();
     let y_graph = camera2d.y1Real();
+    if (graph_override) {
+      y_graph = showMetricGraph(y_graph, graph_override);
+      y_graph -= METRIC_PAD;
+    }
     for (let ii = 0; ii < metrics.length; ++ii) {
       let metric = metrics[ii];
       if (settings[metric.show_stat]) {
         y = showMetric(y, metric);
         y += METRIC_PAD;
       }
-      if (settings[metric.show_graph]) {
+      if (!graph_override && settings[metric.show_graph]) {
         y_graph = showMetricGraph(y_graph, metric);
         y_graph -= METRIC_PAD;
       }
@@ -420,4 +440,6 @@ export function draw() {
     }
     ui.drawRect(x0, y0, maxx, y, z - 0.1, bg_default);
   }
+  camera2d.pop();
+  graph_override = null;
 }

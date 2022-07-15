@@ -7,6 +7,7 @@ export let ds_stats = {
   inflight_set: 0,
 };
 
+/* eslint-disable import/order */
 const assert = require('assert');
 const fs = require('fs');
 const FileStore = require('fs-store').FileStore;
@@ -202,7 +203,13 @@ class DataStore {
           });
         }
         let obj = store.get('data', default_value);
-        cb(null, obj && obj !== default_value ? clone(obj) : obj);
+        if (obj && obj !== default_value) {
+          obj = clone(obj);
+          if (DO_SHUFFLE) {
+            obj = shuffle(obj);
+          }
+        }
+        cb(null, obj);
       });
     });
   }

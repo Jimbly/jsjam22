@@ -1,6 +1,7 @@
 // Portions Copyright 2019 Jimb Esser (https://github.com/Jimbly/)
 // Released under MIT License: https://opensource.org/licenses/MIT
 
+/* eslint-disable import/order */
 const assert = require('assert');
 const camera2d = require('./camera2d.js');
 const glov_engine = require('./engine.js');
@@ -13,6 +14,7 @@ const textures = require('./textures.js');
 const glov_ui = require('./ui.js');
 const { easeOut } = require('glov/common/util.js');
 const { unit_vec, vec4 } = require('glov/common/vmath.js');
+const verify = require('glov/common/verify.js');
 
 let transitions = [];
 
@@ -77,8 +79,7 @@ export function queue(z, fn) {
     let trans = transitions[ii];
     if (trans.z === z) {
       // same Z
-      assert(trans.capture);
-      if (!trans.capture) {
+      if (!verify(trans.capture)) {
         // two transitions at the same Z on one frame!  ignore second
         return false;
       }
@@ -98,7 +99,9 @@ export function queue(z, fn) {
 }
 
 function destroyTexture(tex) {
+  profilerStart('transition:destroyTexture');
   tex.destroy();
+  profilerStop();
 }
 
 export function render(dt) {

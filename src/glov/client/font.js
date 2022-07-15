@@ -2,12 +2,13 @@
 // Released under MIT License: https://opensource.org/licenses/MIT
 /* eslint no-bitwise:off, complexity:off, @typescript-eslint/no-shadow:off */
 
+/* eslint-disable import/order */
 const assert = require('assert');
 const camera2d = require('./camera2d.js');
 const engine = require('./engine.js');
 const geom = require('./geom.js');
 const { getStringFromLocalizable } = require('./localization.js');
-const { floor, max, round } = Math;
+const { max, round } = Math;
 // const settings = require('./settings.js');
 const shaders = require('./shaders.js');
 const sprites = require('./sprites.js');
@@ -401,17 +402,11 @@ GlovFont.prototype.drawSizedAlignedWrapped = function (style, x, y, z, indent, s
   assert(w > 0);
   assert(typeof h !== 'string'); // Old API did not have `indent` parameter
   this.applyStyle(style);
-  this.last_width = 0;
   let lines = [];
   let line_xoffs = [];
-  this.wrapLines(w, indent, size, text, align, (xoffs, linenum, word) => {
-    let line = lines[linenum];
-    if (line) {
-      lines[linenum] = `${line} ${word}`; // This is mangling double spaces or tabs, but maybe fine?
-    } else {
-      line_xoffs[linenum] = xoffs;
-      lines[linenum] = word;
-    }
+  lines.length = this.wrapLines(w, indent, size, text, align, (xoffs, linenum, line) => {
+    line_xoffs[linenum] = xoffs;
+    lines[linenum] = line;
   });
 
   let yoffs = 0;
@@ -431,8 +426,8 @@ GlovFont.prototype.drawSizedAlignedWrapped = function (style, x, y, z, indent, s
   align &= ~ALIGN.VMASK;
 
   for (let ii = 0; ii < lines.length; ++ii) {
-    let line = lines[ii] && lines[ii].trim();
-    if (line) {
+    let line = lines[ii];
+    if (line && line.trim()) {
       this.drawSizedAligned(style, x + line_xoffs[ii], y + yoffs, z, size, align, w - line_xoffs[ii], 0, line);
     }
     yoffs += size;
@@ -476,32 +471,25 @@ GlovFont.prototype.draw = function (param) {
   }
 };
 
-// word_cb(x0, int linenum, const char *word, x1)
-GlovFont.prototype.wrapLines = function (w, indent, size, text, align_bits, word_cb) {
-  return this.wrapLinesScaled(w, indent, size / this.font_info.font_size, text, align_bits, word_cb);
+// line_cb(x0, int linenum, const char *line, x1)
+GlovFont.prototype.wrapLines = function (w, indent, size, text, align_bits, line_cb) {
+  return this.wrapLinesScaled(w, indent, size / this.font_info.font_size, text, align_bits, line_cb);
 };
 
 GlovFont.prototype.numLines = function (style, w, indent, size, text) {
   this.applyStyle(style);
-  let numlines = 0;
-  function wordCallback(ignored, linenum, word) {
-    numlines = max(numlines, linenum);
-  }
-  this.wrapLines(w, indent, size, text, 0, wordCallback);
-  return numlines + 1;
+  return this.wrapLines(w, indent, size, text, 0);
 };
 
 GlovFont.prototype.dims = function (style, w, indent, size, text) {
   this.applyStyle(style);
-  let numlines = 0;
   let max_x1 = 0;
-  function wordCallback(ignored, linenum, word, x1) {
+  function lineCallback(ignored1, ignored2, line, x1) {
     max_x1 = max(max_x1, x1);
-    numlines = max(numlines, linenum);
   }
-  this.wrapLines(w, indent, size, text, 0, wordCallback);
+  let numlines = this.wrapLines(w, indent, size, text, 0, lineCallback);
   return {
-    h: (numlines + 1) * size,
+    h: numlines * size,
     w: max_x1,
   };
 };
@@ -547,87 +535,123 @@ GlovFont.prototype.getStringWidth = function (style, x_size, text) {
   return ret;
 };
 
-// word_cb(x0, int linenum, const char *word, x1)
-GlovFont.prototype.wrapLinesScaled = function (w, indent, xsc, text, align_bits, word_cb) {
+GlovFont.prototype.getSpaceSize = function (xsc) {
+  let space_info = this.infoFromChar(32); // ' '
+  return (space_info ? (space_info.w + space_info.xpad) * space_info.scale : this.font_info.font_size) * xsc;
+};
+
+function endsWord(char_code) {
+  return char_code === 32 || // ' '
+    char_code === 0 || // end of string
+    char_code === 10 || // '\n'
+    char_code === 9; // '\t'
+}
+
+// line_cb(x0, int linenum, const char *line, x1)
+GlovFont.prototype.wrapLinesScaled = function (w, indent, xsc, text, align_bits, line_cb) {
   text = getStringFromLocalizable(text);
   assert(typeof align_bits !== 'function'); // Old API had one less parameter
-  let len = text.length;
-  let s = 0;
+  const len = text.length;
+  const max_word_w = w - indent;
+  // "fit" mode: instead of breaking the too-long word, output it on a line of its own
+  const hard_wrap_mode_fit = align_bits & ALIGN.HFIT;
+  const x_advance = this.calcXAdvance(xsc);
+  const space_size = this.getSpaceSize(xsc) + x_advance;
+  let idx = 0;
+  let line_start = 0;
+  let line_x0 = 0;
+  let line_x1 = 0;
+  let line_end = -1;
   let word_start = 0;
   let word_x0 = 0;
-  let x = word_x0;
+  let word_w = 0;
+  let word_slice = -1;
+  let word_slice_w = 0;
   let linenum = 0;
-  let space_info = this.infoFromChar(32); // ' '
-  let space_size = (space_info ? space_info.w + space_info.xpad : this.font_info.font_size) * xsc;
-  let hard_wrap = false;
-  // "fit" mode: instead of breaking the too-long word, output it on a line of its own
-  let hard_wrap_mode_fit = align_bits & ALIGN.HFIT;
-  let x_advance = this.calcXAdvance(xsc);
+
+  function flushLine() {
+    if (line_end !== -1 && line_cb) {
+      line_cb(line_x0, linenum, text.slice(line_start, line_end), line_x1);
+    }
+    linenum++;
+    line_x0 = indent;
+    line_x1 = -1;
+    line_start = word_start;
+    line_end = -1;
+    word_x0 = line_x0;
+  }
 
   do {
-    let c = s < len ? text.charCodeAt(s) || 0xFFFD : 0;
-    let newx = x;
-    let char_w;
-    let char_info = this.infoFromChar(c);
-    if (char_info) {
-      char_w = (char_info.w + char_info.xpad) * xsc * char_info.scale + x_advance;
-      newx = x + char_w;
-    }
-    if (newx > w && hard_wrap) {
-      // flush the word so far!
-      if (word_cb) {
-        word_cb(word_x0, linenum, text.slice(word_start, s), x);
-      }
-      word_start = s;
-      word_x0 = indent;
-      x = word_x0 + char_w;
-      linenum++;
-    } else {
-      x = newx;
-    }
-    if (!(c === 32 /*' '*/ || c === 0 || c === 10 /*'\n'*/ || c === 9)) {
-      s++;
-      c = s < len ? text.charCodeAt(s) || 0xFFFD : 0;
-    }
-    if (c === 32 /*' '*/ || c === 0 || c === 10 /*'\n'*/ || c === 9) {
-      hard_wrap = false;
-      // draw word until s
-      if (x > w) {
-        // maybe wrap
-        let word_width = x - word_x0;
-        if (word_width > w - indent && !hard_wrap_mode_fit) {
-          // not going to fit, split it up!
-          hard_wrap = true;
-          // recover and restart at word start
-          s = word_start;
-          x = word_x0;
-          continue;
-        } else if (linenum || word_x0) {
-          word_x0 = indent;
-          x = word_x0 + word_width;
-          linenum++;
+    let c = idx < len ? text.charCodeAt(idx) || 0xFFFD : 0;
+    if (endsWord(c)) {
+      if (word_start !== idx) {
+        let need_line_flush = false;
+        // flush word, take care of space on next loop
+        if (word_x0 + word_w <= w) {
+          // fits fine, add to line, start new word
+        } else if (word_w > max_word_w && !hard_wrap_mode_fit) {
+          // even just this word alone won't fit, needs a hard wrap
+          // output what fits on this line, then continue to next line
+          need_line_flush = true;
+          if (word_slice === -1) {
+            // not even a single letter fits on this line
+            if (line_end !== -1) {
+              // wrap to a new line if not already
+              flushLine();
+            }
+            // just output one letter, start new word from second letter
+            idx = line_start + 1;
+            word_w = max_word_w; // underestimate
+          } else {
+            // output what fits on this line so far
+            idx = word_slice;
+            word_w = word_slice_w;
+          }
+        } else {
+          // won't fit, but fits on next line, soft wrap
+          if (line_end !== -1) {
+            flushLine();
+          }
+        }
+        //addWord();
+        line_end = idx;
+        line_x1 = word_x0 + word_w;
+        word_x0 = line_x1;
+        word_w = 0;
+        word_start = idx;
+        word_slice = -1;
+
+        if (need_line_flush) {
+          flushLine();
+        }
+
+        // we're now either still pointing at the space, or rewound to an earlier point
+        continue;
+      } else {
+        // process the space
+        word_start = idx + 1;
+        word_x0 += space_size;
+        if (c === 10) { // \n
+          flushLine();
         }
       }
-      if (word_cb) {
-        word_cb(word_x0, linenum, text.slice(word_start, s), x);
-      }
-      word_start = s+1;
-      if (c === 10 /*'\n'*/) {
-        x = indent;
-        linenum++;
-      } else if (c === 9 /*'\t'*/) {
-        let tabsize = xsc * this.font_info.font_size * 2;
-        x = (floor(x / tabsize) + 1) * tabsize;
-      } else {
-        x += space_size;
-      }
-      word_x0 = x;
-      if (c === 32 /*' '*/ || c === 10 /*'\n'*/ || c === 9) {
-        s++; // advance past space
+    } else {
+      let char_info = this.infoFromChar(c);
+      if (char_info) {
+        let char_w = (char_info.w + char_info.xpad) * xsc * char_info.scale + x_advance;
+        word_w += char_w;
+        if (word_x0 + word_w <= w) { // would partially fit up to and including this letter
+          word_slice = idx + 1;
+          word_slice_w = word_w;
+        }
       }
     }
-  } while (s < len);
-  ++linenum;
+    ++idx;
+  } while (idx <= len);
+  if (line_end !== -1) {
+    flushLine();
+  }
+
   return linenum;
 };
 
@@ -637,12 +661,13 @@ GlovFont.prototype.drawScaledWrapped = function (style, x, y, z, w, indent, xsc,
   }
   assert(w > 0);
   this.applyStyle(style);
+  // This function returns height instead of width, so leave the maximum width encountered here for caller
   this.last_width = 0;
-  let num_lines = this.wrapLinesScaled(w, indent, xsc, text, 0, (xoffs, linenum, word) => {
+  let num_lines = this.wrapLinesScaled(w, indent, xsc, text, 0, (xoffs, linenum, line, x1) => {
     let y2 = y + this.font_info.font_size * ysc * linenum;
     let x2 = x + xoffs;
-    let word_w = this.drawScaled(style, x2, y2, z, xsc, ysc, word);
-    this.last_width = max(this.last_width, xoffs + word_w);
+    this.drawScaled(style, x2, y2, z, xsc, ysc, line);
+    this.last_width = max(this.last_width, x1);
   });
   return num_lines * this.font_info.font_size * ysc;
 };

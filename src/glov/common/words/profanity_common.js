@@ -27,6 +27,7 @@ function rot13(str) {
 }
 
 let profanity = {};
+let reserved = {};
 
 // shorter first, if substrings (just 's' and 'es'/'ers')
 let suffixes =           [ '', 's',  's', 'in', 'ing', 'er', 'ers', 'ed', 'y' ];
@@ -61,6 +62,14 @@ export function profanityCommonStartup(filter_gkg, exceptions_txt) {
   data = exceptions_txt.split('\n').filter((a) => a);
   for (let ii = 0; ii < data.length; ++ii) {
     delete profanity[canonize(data[ii])];
+  }
+}
+
+export function reservedStartup(reserved_txt) {
+  let data = reserved_txt.split('\n').filter((a) => a);
+  for (let i = 0; i < data.length; ++i) {
+    let string = canonize(data[i]);
+    reserved[string] = 1;
   }
 }
 
@@ -115,4 +124,18 @@ export function isProfane(user_str) {
   is_profane = false;
   user_str.replace(trans_src_regex, checkWord);
   return is_profane;
+}
+
+let is_reserved;
+function checkReserved(word_src) {
+  if (reserved[canonize(word_src)]) {
+    is_reserved = true;
+  }
+}
+
+export function isReserved(user_str) {
+  assert(inited);
+  is_reserved = false;
+  user_str.replace(trans_src_regex, checkReserved);
+  return is_reserved;
 }

@@ -1,9 +1,9 @@
-import { ErrorCallback } from 'glov/common/types.js';
 import assert from 'assert';
 import { createHmac } from 'crypto';
-import { executeWithRetry } from './execute_with_retry.js';
+import { ErrorCallback } from 'glov/common/types';
 import request from 'request';
-import { serverConfig } from './server_config.js';
+import { executeWithRetry } from './execute_with_retry';
+import { serverConfig } from './server_config';
 
 export declare interface FacebookGraphError {
   message?: string;

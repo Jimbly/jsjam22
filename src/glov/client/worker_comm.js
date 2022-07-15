@@ -38,8 +38,10 @@ export function sendmsg(worker_index, id, data, transfer) {
 function workerOnMessage(worker_index, evt) {
   evt = evt.data;
   if (evt instanceof Object && evt.id) {
+    profilerStart(`worker:${evt.id}`);
     assert(handlers[evt.id]);
     handlers[evt.id](worker_index, evt.data);
+    profilerStop();
   } else {
     console.log('worker_comm (main thread) unhandled message', evt);
   }

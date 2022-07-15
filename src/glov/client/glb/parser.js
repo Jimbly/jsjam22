@@ -1,6 +1,7 @@
 // Derived from (MIT Licensed) https://github.com/uber-web/loaders.gl/tree/master/modules/gltf
 /* eslint-env browser */
 
+/* eslint-disable import/order */
 const assert = require('assert');
 
 const { unpackGLBBuffers } = require('./unpack-glb-buffers.js');

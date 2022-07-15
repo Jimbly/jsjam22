@@ -5,6 +5,8 @@
 window.Z = window.Z || {};
 export const Z = window.Z;
 
+export const Z_MIN_INC = 1e-5;
+
 Z.BORDERS = Z.BORDERS || 90;
 Z.UI = Z.UI || 100;
 Z.MODAL = Z.MODAL || 1000;
@@ -22,9 +24,10 @@ export const LINE_ALIGN = 1<<0;
 export const LINE_CAP_SQUARE = 1<<1;
 export const LINE_CAP_ROUND = 1<<2;
 
+/* eslint-disable import/order */
 const assert = require('assert');
 const camera2d = require('./camera2d.js');
-const glov_edit_box = require('./edit_box.js');
+const { editBoxCreate, editBoxTick } = require('./edit_box.js');
 const effects = require('./effects.js');
 const { effectsQueue } = effects;
 const glov_engine = require('./engine.js');
@@ -34,13 +37,34 @@ const { mouseMoved } = glov_input;
 const { linkTick } = require('./link.js');
 const { getStringFromLocalizable } = require('./localization.js');
 const { abs, floor, max, min, round, sqrt } = Math;
+const { scrollAreaSetPixelScale } = require('./scroll_area.js');
 const { soundLoad, soundPlay } = require('./sound.js');
+const {
+  SPOT_DEFAULT_BUTTON,
+  SPOT_DEFAULT_BUTTON_DRAW_ONLY,
+  SPOT_DEFAULT_LABEL,
+  SPOT_STATE_REGULAR,
+  SPOT_STATE_DOWN,
+  SPOT_STATE_FOCUSED,
+  SPOT_STATE_DISABLED,
+  spot,
+  spotEndOfFrame,
+  spotFocusableCanvas,
+  spotPadMode,
+  spotTopOfFrame,
+  spotUnfocus,
+} = require('./spot.js');
 const glov_sprites = require('./sprites.js');
-const { clipped, clipPause, clipResume } = glov_sprites;
+const { clipped, clipPause, clipResume, BLEND_PREMULALPHA } = glov_sprites;
 const textures = require('./textures.js');
-const { clamp, clone, defaults, lerp, merge } = require('glov/common/util.js');
+const { clamp, clone, defaults, deprecate, lerp, merge } = require('glov/common/util.js');
 const { mat43, m43identity, m43mul } = require('./mat43.js');
-const { vec2, vec4, v4scale, unit_vec } = require('glov/common/vmath.js');
+const { vec2, vec4, v3scale, unit_vec } = require('glov/common/vmath.js');
+
+deprecate(exports, 'slider_dragging', 'slider.js:sliderIsDragging()');
+deprecate(exports, 'slider_rollover', 'slider.js:sliderIsFocused()');
+deprecate(exports, 'setSliderDefaultShrink', 'slider.js:sliderSetDefaultShrink()');
+deprecate(exports, 'slider', 'slider.js:slider()');
 
 const MODAL_DARKEN = 0.75;
 let KEYS;
@@ -54,28 +78,28 @@ const menu_fade_params_default = {
   z: Z.MODAL,
 };
 
-export function focuslog(...args) {
-  // console.log(`focuslog(${glov_engine.frame_index}): `, ...args);
+let color_set_shades = vec4(1, 1, 1, 1);
+
+let color_sets = [];
+function applyColorSet(color_set) {
+  v3scale(color_set.regular, color_set.color, color_set_shades[0]);
+  v3scale(color_set.rollover, color_set.color, color_set_shades[1]);
+  v3scale(color_set.down, color_set.color, color_set_shades[2]);
+  v3scale(color_set.disabled, color_set.color, color_set_shades[3]);
 }
-
-let color_set_shades = vec4(1, 0.8, 0.7, 0.4);
-
-const Z_MIN_INC = 1e-5;
-
 export function makeColorSet(color) {
   let ret = {
+    color,
     regular: vec4(),
     rollover: vec4(),
     down: vec4(),
     disabled: vec4(),
   };
-  v4scale(ret.regular, color, color_set_shades[0]);
-  v4scale(ret.rollover, color, color_set_shades[1]);
-  v4scale(ret.down, color, color_set_shades[2]);
-  v4scale(ret.disabled, color, color_set_shades[3]);
   for (let field in ret) {
     ret[field][3] = color[3];
   }
+  color_sets.push(ret);
+  applyColorSet(ret);
   return ret;
 }
 
@@ -175,12 +199,13 @@ export let tooltip_panel_pixel_scale = panel_pixel_scale;
 export let tooltip_width = 400;
 export let tooltip_pad = 8;
 
-export let font_style_focused = glov_font.style(null, {
-  color: 0x000000ff,
-  outline_width: 2,
-  outline_color: 0xFFFFFFff,
-});
+// export let font_style_focused = glov_font.style(null, {
+//   color: 0x000000ff,
+//   outline_width: 2,
+//   outline_color: 0xFFFFFFff,
+// });
 export let font_style_normal = glov_font.styleColored(null, 0x000000ff);
+export let font_style_focused = glov_font.style(font_style_normal, {});
 
 export let font;
 export let title_font;
@@ -194,34 +219,20 @@ let sounds = {};
 export let button_mouseover = false; // for callers to poll the very last button
 export let button_focused = false; // for callers to poll the very last button
 export let button_click = null; // on click, for callers to poll which mouse button, etc
-export let touch_changed_focus = false; // did a touch even this frame change focus?
 // For tracking global mouseover state
 let last_frame_button_mouseover = false;
 let frame_button_mouseover = false;
 
 let modal_dialog = null;
-let modal_stealing_focus = false;
 export let menu_up = false; // Boolean to be set by app to impact behavior, similar to a modal
 let menu_fade_params = merge({}, menu_fade_params_default);
 let menu_up_time = 0;
 
-exports.this_frame_edit_boxes = [];
-let last_frame_edit_boxes = [];
 let dom_elems = [];
 let dom_elems_issued = 0;
 
 // for modal dialogs
 let button_keys;
-
-let focused_last_frame;
-let focused_this_frame;
-let focused_key_not;
-let focused_key;
-let focused_key_prev1;
-let focused_key_prev2;
-
-let pad_focus_left;
-let pad_focus_right;
 
 let default_line_mode;
 
@@ -239,7 +250,9 @@ export function colorSetSetShades(rollover, down, disabled) {
   color_set_shades[1] = rollover;
   color_set_shades[2] = down;
   color_set_shades[3] = disabled;
-  color_button = makeColorSet([1,1,1,1]);
+  for (let ii = 0; ii < color_sets.length; ++ii) {
+    applyColorSet(color_sets[ii]);
+  }
 }
 
 export function loadUISprite(name, ws, hs, overrides, only_override) {
@@ -268,6 +281,28 @@ export function loadUISprite(name, ws, hs, overrides, only_override) {
   }
 }
 
+export function loadUISprite2(name, param) {
+  if (param === null) {
+    // skip it, assume not used
+    return;
+  }
+  let wrap_s = gl.CLAMP_TO_EDGE;
+  let wrap_t = param.wrap_t ? gl.REPEAT : gl.CLAMP_TO_EDGE;
+  let sprite_param = {
+    ws: param.ws,
+    hs: param.hs,
+    wrap_s,
+    wrap_t,
+    layers: param.layers,
+  };
+  if (param.url) {
+    sprite_param.url = param.url;
+  } else {
+    sprite_param.name = `ui/${param.name || name}`;
+  }
+  sprites[name] = glov_sprites.create(sprite_param);
+}
+
 export function setFonts(new_font, new_title_font) {
   font = new_font;
   title_font = new_title_font || font;
@@ -284,43 +319,100 @@ export function setProvideUserStringDefaultMessages(success_msg, failure_msg) {
   default_copy_failure_msg = failure_msg;
 }
 
+const base_ui_sprites = {
+  color_set_shades: [1, 1, 1],
+
+  white: { url: 'white' },
+
+  button: { ws: [8, 112, 8], hs: [128] },
+  button_rollover: { ws: [8, 112, 8], hs: [128] },
+  button_down: { ws: [8, 112, 8], hs: [128] },
+  button_disabled: { ws: [8, 112, 8], hs: [128] },
+  panel: { ws: [32, 64, 32], hs: [32, 64, 32] },
+
+  menu_entry: { ws: [8, 112, 8], hs: [128] },
+  menu_selected: { ws: [8, 112, 8], hs: [128] },
+  menu_down: { ws: [8, 112, 8], hs: [128] },
+  menu_header: { ws: [8, 112, 136], hs: [128] },
+  slider: { ws: [56, 16, 56], hs: [128] },
+  // slider_notch: { ws: [3], hs: [13] },
+  slider_handle: { ws: [64], hs: [128] },
+
+  scrollbar_bottom: { ws: [64], hs: [64] },
+  scrollbar_trough: { ws: [64], hs: [8], wrap_t: true },
+  scrollbar_top: { ws: [64], hs: [64] },
+  scrollbar_handle_grabber: { ws: [64], hs: [64] },
+  scrollbar_handle: { ws: [64], hs: [24, 16, 24] },
+  progress_bar: { ws: [48, 32, 48], hs: [128] },
+  progress_bar_trough: { ws: [48, 32, 48], hs: [128] },
+};
+
+export const ui_sprites_stone = {
+  button: { name: 'stone/button', ws: [32, 64, 32], hs: [128] },
+  button_rollover: { name: 'stone/button_rollover', ws: [32, 64, 32], hs: [128] },
+  button_down: { name: 'stone/button_down', ws: [32, 64, 32], hs: [128] },
+  button_disabled: { name: 'stone/button_disabled', ws: [32, 64, 32], hs: [128] },
+};
+
+export const ui_sprites_pixely = {
+  color_set_shades: [0.8, 0.7, 0.4],
+
+  button: { name: 'pixely/button', ws: [4, 5, 4], hs: [13] },
+  button_rollover: null,
+  button_down: { name: 'pixely/button_down', ws: [4, 5, 4], hs: [13] },
+  button_disabled: { name: 'pixely/button_disabled', ws: [4, 5, 4], hs: [13] },
+  panel: { name: 'pixely/panel', ws: [3, 2, 3], hs: [3, 10, 3] },
+  menu_entry: { name: 'pixely/menu_entry', ws: [4, 5, 4], hs: [13] },
+  menu_selected: { name: 'pixely/menu_selected', ws: [4, 5, 4], hs: [13] },
+  menu_down: { name: 'pixely/menu_down', ws: [4, 5, 4], hs: [13] },
+  menu_header: { name: 'pixely/menu_header', ws: [4, 5, 12], hs: [13] },
+  slider: { name: 'pixely/slider', ws: [6, 2, 6], hs: [13] },
+  // slider_notch:  name: 'pixely///',{ ws: [3], hs: [13] },
+  slider_handle: { name: 'pixely/slider_handle', ws: [9], hs: [13] },
+
+  scrollbar_bottom: { name: 'pixely/scrollbar_bottom', ws: [11], hs: [13] },
+  scrollbar_trough: { name: 'pixely/scrollbar_trough', ws: [11], hs: [8], wrap_t: true },
+  scrollbar_top: { name: 'pixely/scrollbar_top', ws: [11], hs: [13] },
+  scrollbar_handle_grabber: { name: 'pixely/scrollbar_handle_grabber', ws: [11], hs: [13] },
+  scrollbar_handle: { name: 'pixely/scrollbar_handle', ws: [11], hs: [3, 7, 3] },
+  progress_bar: { name: 'pixely/progress_bar', ws: [3, 7, 3], hs: [13] },
+  progress_bar_trough: { name: 'pixely/progress_bar_trough', ws: [3, 7, 3], hs: [13] },
+};
+
 export function startup(param) {
   font = param.font;
   title_font = param.title_font || font;
   let overrides = param.ui_sprites;
   KEYS = glov_input.KEYS;
   PAD = glov_input.PAD;
-  if (param.pad_focus_dpad) {
-    pad_focus_left = PAD.LEFT;
-    pad_focus_right = PAD.RIGHT;
-  } else {
-    pad_focus_left = PAD.LEFT_BUMPER;
-    pad_focus_right = PAD.RIGHT_BUMPER;
+
+  let ui_sprites = {
+    ...base_ui_sprites,
+    ...param.ui_sprites,
+  };
+
+  for (let key in ui_sprites) {
+    let base_elem = base_ui_sprites[key];
+    if (typeof base_elem === 'object' && !Array.isArray(base_elem)) {
+      let override = overrides && overrides[key];
+      loadUISprite2(key, override === undefined ? base_elem : override);
+    }
+  }
+  sprites.button_regular = sprites.button;
+
+  if (ui_sprites.color_set_shades) {
+    colorSetSetShades(...ui_sprites.color_set_shades);
   }
 
-  loadUISprite('button', [4, 5, 4], [13], overrides);
-  sprites.button_regular = sprites.button;
-  loadUISprite('button_rollover', [4, 5, 4], [13], overrides, true);
-  loadUISprite('button_down', [4, 5, 4], [13], overrides);
-  loadUISprite('button_disabled', [4, 5, 4], [13], overrides);
-  loadUISprite('panel', [3, 2, 3], [3, 10, 3], overrides);
-  loadUISprite('menu_entry', [4, 5, 4], [13], overrides);
-  loadUISprite('menu_selected', [4, 5, 4], [13], overrides);
-  loadUISprite('menu_down', [4, 5, 4], [13], overrides);
-  loadUISprite('menu_header', [4, 5, 12], [13], overrides);
-  loadUISprite('slider', [6, 2, 6], [13], overrides);
-  // loadUISprite('slider_notch', [3], [13], overrides);
-  loadUISprite('slider_handle', [9], [13], overrides);
-
-  loadUISprite('scrollbar_bottom', [11], [13], overrides);
-  loadUISprite('scrollbar_trough', [11], [8], overrides);
-  loadUISprite('scrollbar_top', [11], [13], overrides);
-  loadUISprite('scrollbar_handle_grabber', [11], [13], overrides);
-  loadUISprite('scrollbar_handle', [11], [3, 7, 3], overrides);
-  loadUISprite('progress_bar', [3, 7, 3], [13], overrides);
-  loadUISprite('progress_bar_trough', [3, 7, 3], [13], overrides);
-
-  sprites.white = glov_sprites.create({ url: 'white' });
+  if (sprites.button_rollover && color_set_shades[1] !== 1) {
+    colorSetSetShades(1, color_set_shades[2], color_set_shades[3]);
+  }
+  if (sprites.button_down && color_set_shades[2] !== 1) {
+    colorSetSetShades(color_set_shades[1], 1, color_set_shades[3]);
+  }
+  if (sprites.button_disabled && color_set_shades[3] !== 1) {
+    colorSetSetShades(color_set_shades[1], color_set_shades[2], 1);
+  }
 
   button_keys = {
     ok: { key: [KEYS.O], pad: [PAD.X], low_key: [KEYS.ESC] },
@@ -341,6 +433,9 @@ export function startup(param) {
     //   default_line_mode = 0;
     // }
   }
+
+  // eslint-disable-next-line no-use-before-define
+  scaleSizes(1);
 }
 
 let dynamic_text_elem;
@@ -349,8 +444,10 @@ let per_frame_dom_suppress = 0;
 export function suppressNewDOMElemWarnings() {
   per_frame_dom_suppress = glov_engine.frame_index + 1;
 }
-export function getDOMElem(allow_modal, last_elem) {
+export function uiGetDOMElem(last_elem, allow_modal) {
   if (modal_dialog && !allow_modal) {
+    // Note: this case is no longer needed for edit boxes (spot's focus logic
+    //   handles this), but links still rely on this
     return null;
   }
   if (dom_elems_issued >= dom_elems.length || !last_elem) {
@@ -561,85 +658,13 @@ export function setMouseOver(key, quiet) {
   glov_input.mouseOverCaptured();
 }
 
-export function focusSteal(key) {
-  if (key !== focused_key) {
-    focuslog('focusSteal ', key);
-  }
-  focused_this_frame = true;
-  focused_key = key;
-}
-
 export function focusCanvas() {
-  focusSteal('canvas');
+  spotUnfocus();
 }
 
-export function isFocusedPeek(key) {
-  return focused_key === key;
-}
-export function isFocused(key) {
-  if (key !== focused_key_prev2) {
-    focused_key_prev1 = focused_key_prev2;
-    focused_key_prev2 = key;
-  }
-  if (key === focused_key || key !== focused_key_not && !focused_this_frame &&
-    !focused_last_frame
-  ) {
-    if (key !== focused_key) {
-      focuslog('isFocused->focusSteal');
-    }
-    focusSteal(key);
-    return true;
-  }
-  return false;
-}
-
-export function focusNext(key) {
-  focuslog('focusNext ', key);
-  playUISound('rollover');
-  focused_key = null;
-  focused_last_frame = focused_this_frame = false;
-  focused_key_not = key;
-  // Eat input events so a pair of keys (e.g. SDLK_DOWN and SDLK_CONTROLLER_DOWN)
-  // don't get consumed by two separate widgets
-  glov_input.eatAllInput(true);
-}
-
-export function focusPrev(key) {
-  focuslog('focusPrev ', key);
-  playUISound('rollover');
-  if (key === focused_key_prev2) {
-    focusSteal(focused_key_prev1);
-  } else {
-    focusSteal(focused_key_prev2);
-  }
-  glov_input.eatAllInput(true);
-}
-
-export function focusCheck(key) {
-  if (modal_stealing_focus) {
-    // hidden by modal, etc
-    return false;
-  }
-  // Returns true even if focusing previous element, since for this frame, we are still effectively focused!
-  let focused = isFocused(key);
-  if (focused) {
-    if (glov_input.keyDownEdge(KEYS.TAB)) {
-      if (glov_input.keyDown(KEYS.SHIFT)) {
-        focusPrev(key);
-      } else {
-        focusNext(key);
-        focused = false;
-      }
-    }
-    if (glov_input.padButtonDownEdge(pad_focus_right)) {
-      focusNext(key);
-      focused = false;
-    }
-    if (glov_input.padButtonDownEdge(pad_focus_left)) {
-      focusPrev(key);
-    }
-  }
-  return focused;
+// Returns true if the navigation inputs (arrows, etc) should go to the UI, not the app
+export function uiHandlingNav() {
+  return menu_up || !spotFocusableCanvas().focused;
 }
 
 export function panel(param) {
@@ -652,9 +677,8 @@ export function panel(param) {
   let color = param.color || color_panel;
   drawBox(param, param.sprite || sprites.panel, param.pixel_scale || panel_pixel_scale, color);
   if (param.eat_clicks) {
-    glov_input.click(param);
+    glov_input.mouseOver(param);
   }
-  glov_input.mouseOver(param);
 }
 
 export function drawTooltip(param) {
@@ -702,6 +726,7 @@ export function drawTooltip(param) {
     w: eff_tooltip_w,
     h: y - tooltip_y0,
     pixel_scale,
+    eat_clicks: false,
   });
   if (clip_pause) {
     clipResume();
@@ -742,103 +767,85 @@ export function progressBar(param) {
     no_min_width: true,
   }, sprites.progress_bar, param.color || unit_vec);
   if (param.tooltip) {
-    if (glov_input.mouseOver(param)) {
-      drawTooltipBox(param);
-    }
+    spot({
+      x: param.x, y: param.y,
+      w: param.w, h: param.h,
+      tooltip: param.tooltip,
+      def: SPOT_DEFAULT_LABEL,
+    });
   }
 }
+
+// TODO: refactor so callers all use the new states 'focused'
+const SPOT_STATE_TO_UI_BUTTON_STATE = {
+  [SPOT_STATE_REGULAR]: 'regular',
+  [SPOT_STATE_DOWN]: 'down',
+  [SPOT_STATE_FOCUSED]: 'rollover',
+  [SPOT_STATE_DISABLED]: 'disabled',
+};
+
+const UISPOT_BUTTON_DISABLED = {
+  ...SPOT_DEFAULT_BUTTON,
+  disabled: true,
+  disabled_focusable: false,
+  sound_rollover: null,
+};
+
 
 export function buttonShared(param) {
   param.z = param.z || Z.UI;
-  let state = 'regular';
-  let ret = false;
-  let key = param.key || `${focus_parent_id}_${param.x}_${param.y}`;
-  let rollover_quiet = param.rollover_quiet;
-  button_mouseover = false;
-  if (param.draw_only) {
-    if (param.draw_only_mouseover && (!param.disabled || param.disabled_mouseover)) {
-      if (glov_input.mouseOver(param)) {
-        setMouseOver(key, rollover_quiet);
-      }
-      if (button_mouseover && param.tooltip) {
-        drawTooltipBox(param);
-      }
-    }
-    return { ret, state };
+  if (param.rollover_quiet) {
+    param.sound_rollover = null;
   }
-  let focused = !param.disabled && !param.no_focus && focusCheck(key);
-  let key_opts = param.in_event_cb ? { in_event_cb: param.in_event_cb } : null;
-  if (param.disabled) {
-    if (glov_input.mouseOver(param)) { // Still eat mouse events
-      if (param.disabled_mouseover) {
-        setMouseOver(key, rollover_quiet);
-      }
-    }
-    state = 'disabled';
-  } else if (param.drag_target && (ret = glov_input.dragDrop(param))) {
-    if (!glov_input.mousePosIsTouch()) {
-      setMouseOver(key, rollover_quiet);
-    }
-    if (!param.no_focus) {
-      focusSteal(key);
-      focused = true;
-    }
-    button_click = { drag: true };
-  } else if ((button_click = glov_input.click(param)) ||
-    param.long_press && (button_click = glov_input.longPress(param))
-  ) {
-    if (param.touch_twice && !focused && glov_input.mousePosIsTouch()) {
-      // Just focus, show tooltip
-      touch_changed_focus = true;
-      setMouseOver(key, rollover_quiet);
+  let spot_ret;
+  if (param.draw_only && !param.draw_only_mouseover) {
+    // no spot() needed
+    spot_ret = { ret: false, state: 'regular', focused: false };
+  } else {
+    if (param.draw_only) {
+      assert(!param.def || param.def === SPOT_DEFAULT_BUTTON_DRAW_ONLY);
+      param.def = SPOT_DEFAULT_BUTTON_DRAW_ONLY;
+    } else if (param.disabled && !param.disabled_focusable) {
+      param.def = param.def || UISPOT_BUTTON_DISABLED;
     } else {
-      ret = true;
-      if (last_frame_button_mouseover === key) {
-        // preserve mouse over if we have it
-        setMouseOver(key, rollover_quiet);
-      }
+      param.def = param.def || SPOT_DEFAULT_BUTTON;
     }
-    if (!param.no_focus) {
-      focusSteal(key);
-      focused = true;
+    if (param.sound) {
+      param.sound_button = param.sound;
     }
-  } else if (param.drag_target && glov_input.dragOver(param)) {
-    // Mouseover even if touch?
-    setMouseOver(key, rollover_quiet);
-    state = glov_input.mouseDown() ? 'down' : 'rollover';
-  } else if (param.drag_over && glov_input.dragOver(param)) {
-    // do nothing
-  } else if (glov_input.mouseOver(param)) {
-    param.do_max_dist = true; // Need to apply the same max_dist logic to mouseDown() as we do for click()
-    state = glov_input.mouseDown(param) ? 'down' : 'rollover';
-    // On touch, only set mouseover if also down
-    if (!glov_input.mousePosIsTouch() || state === 'down') {
-      setMouseOver(key, rollover_quiet);
+    spot_ret = spot(param);
+    spot_ret.state = SPOT_STATE_TO_UI_BUTTON_STATE[spot_ret.spot_state];
+    if (spot_ret.ret) {
+      // TODO: refactor callers to gather this from spot_ret, passes as return from button()/etc
+      button_click = spot_ret;
+      button_click.was_double_click = spot_ret.double_click;
     }
   }
-  button_focused = focused;
-  if (focused) {
-    if (glov_input.keyDownEdge(KEYS.RETURN, key_opts) ||
-      glov_input.padButtonDownEdge(PAD.A)
-    ) {
-      button_click = { kb: true };
-      ret = true;
-    }
-  }
-  if (ret) {
-    state = 'down';
-    playUISound(param.sound || 'button_click');
-  }
-  if (button_mouseover && param.tooltip) {
-    drawTooltipBox(param);
-  }
-  param.z += param.z_bias && param.z_bias[state] || 0;
-  checkHooks(param, ret);
-  return { ret, state, focused };
+
+  button_focused = button_mouseover = spot_ret.focused;
+  param.z += param.z_bias && param.z_bias[spot_ret.state] || 0;
+  return spot_ret;
 }
 
 export let button_last_color;
-function buttonBackgroundDraw(param, state) {
+export function buttonBackgroundDraw(param, state) {
+  let colors = param.colors || color_button;
+  let color = button_last_color = param.color || colors[state];
+  if (!param.no_bg) {
+    let base_name = param.base_name || 'button';
+    let sprite_name = `${base_name}_${state}`;
+    let sprite = sprites[sprite_name];
+    // Note: was if (sprite) color = colors.regular for specific-sprite matches
+    if (!sprite) {
+      sprite = sprites[base_name];
+    }
+
+    drawHBox(param, sprite, color);
+  }
+}
+
+export function buttonSpotBackgroundDraw(param, spot_state) {
+  let state = SPOT_STATE_TO_UI_BUTTON_STATE[spot_state];
   let colors = param.colors || color_button;
   let color = button_last_color = param.color || colors[state];
   if (!param.no_bg) {
@@ -876,9 +883,10 @@ export function buttonText(param) {
   param.h = param.h || button_height;
   param.font_height = param.font_height || font_height;
 
-  let { ret, state, focused } = buttonShared(param);
+  let spot_ret = buttonShared(param);
+  let { ret, state, focused } = spot_ret;
   buttonTextDraw(param, state, focused);
-  return ret;
+  return ret ? spot_ret : null;
 }
 
 function buttonImageDraw(param, state, focused) {
@@ -937,9 +945,10 @@ export function buttonImage(param) {
   param.shrink = param.shrink || 0.75;
   //param.img_rect; null -> full image
 
-  let { ret, state, focused } = buttonShared(param);
+  let spot_ret = buttonShared(param);
+  let { ret, state, focused } = spot_ret;
   buttonImageDraw(param, state, focused);
-  return ret;
+  return ret ? spot_ret : null;
 }
 
 export function button(param) {
@@ -963,7 +972,8 @@ export function button(param) {
   param.left_align = true; // always left-align images
   param.font_height = param.font_height || font_height;
 
-  let { ret, state, focused } = buttonShared(param);
+  let spot_ret = buttonShared(param);
+  let { ret, state, focused } = spot_ret;
   buttonImageDraw(param, state, focused);
   // Hide some stuff on the second draw
   let saved_no_bg = param.no_bg;
@@ -977,7 +987,7 @@ export function button(param) {
   param.no_bg = saved_no_bg;
   param.w = saved_w;
   param.x = saved_x;
-  return ret;
+  return ret ? spot_ret : null;
 }
 
 export function print(style, x, y, z, text) {
@@ -993,16 +1003,32 @@ export function label(param) {
   assert(isFinite(x));
   assert(isFinite(y));
   assert.equal(typeof text, 'string');
-  if (align) {
-    use_font.drawSizedAligned(style, x, y, z, size, align, w, h, text);
-  } else {
-    use_font.drawSized(style, x, y, z, size, text);
-  }
   if (tooltip) {
+    if (!w) {
+      w = use_font.getStringWidth(style, size, text);
+    }
     assert(isFinite(w));
     assert(isFinite(h));
-    if (glov_input.mouseOver(param)) {
-      drawTooltipBox(param);
+    let spot_ret = spot({
+      x, y, w, h,
+      tooltip: tooltip,
+      def: SPOT_DEFAULT_LABEL,
+    });
+    if (spot_ret.focused && spotPadMode()) {
+      if (param.style_focused) {
+        style = param.style_focused;
+      } else {
+        // No focused style provided, do a generic glow instead?
+        // eslint-disable-next-line no-use-before-define
+        drawElipse(x - w*0.25, y-h*0.25, x + w*1.25, y + h*1.25, z - 0.001, 0.5, unit_vec);
+      }
+    }
+  }
+  if (text) {
+    if (align) {
+      use_font.drawSizedAligned(style, x, y, z, size, align, w, h, text);
+    } else {
+      use_font.drawSized(style, x, y, z, size, text);
     }
   }
 }
@@ -1042,8 +1068,9 @@ function modalDialogRun() {
   let vpad = modal_pad * 0.5;
   let general_scale = 1;
   let exit_lock = true;
-  if (virtual_size[0] > 0.1 * camera2d.h() && camera2d.w() > camera2d.h() * 2) {
-    // If a 24-pt font is more than 10% of the camera height, we're probably super-wide-screen
+  let num_lines;
+  if (virtual_size[0] > 0.05 * camera2d.h() && camera2d.w() > camera2d.h() * 2) {
+    // If a 24-pt font is more than 5% of the camera height, we're probably super-wide-screen
     // on a mobile device due to keyboard being visible
     fullscreen_mode = true;
     eff_button_height = eff_font_height;
@@ -1051,8 +1078,20 @@ function modalDialogRun() {
 
     let old_h = camera2d.h();
     camera2d.push();
-    camera2d.setAspectFixed2(1, eff_font_height * (modal_title_scale + 2) + pad * 4.5);
-    general_scale = camera2d.h() / old_h;
+    // Find a number of lines (and implicit scaling) such they all fit
+    for (num_lines = 1; ; num_lines++) {
+      camera2d.setAspectFixed2(1, eff_font_height * (modal_title_scale + 1 + num_lines) + pad * 4.5);
+      general_scale = camera2d.h() / old_h;
+      if (!modal_dialog.text) {
+        break;
+      }
+      const game_width = camera2d.x1() - camera2d.x0();
+      const text_w = game_width - pad * 2;
+      let wrapped_numlines = font.numLines(modal_font_style, text_w, 0, eff_font_height, modal_dialog.text);
+      if (wrapped_numlines <= num_lines) {
+        break;
+      }
+    }
   }
 
   let { buttons, click_anywhere } = modal_dialog;
@@ -1082,11 +1121,13 @@ function modalDialogRun() {
     y = round(y + vpad * 1.5);
   }
 
-  if (modal_dialog.text) {
+  if (modal_dialog.text || fullscreen_mode) {
     if (fullscreen_mode) {
-      font.drawSizedAligned(modal_font_style, x, y, Z.MODAL, eff_font_height,
-        glov_font.ALIGN.HFIT, text_w, 0, modal_dialog.text);
-      y += eff_font_height;
+      if (modal_dialog.text) {
+        font.drawSizedAligned(modal_font_style, x, y, Z.MODAL, eff_font_height,
+          glov_font.ALIGN.HWRAP, text_w, 0, modal_dialog.text);
+      }
+      y += eff_font_height * num_lines;
     } else {
       y += font.drawSizedWrapped(modal_font_style, x, y, Z.MODAL, text_w, 0, eff_font_height,
         modal_dialog.text);
@@ -1142,6 +1183,7 @@ function modalDialogRun() {
       w: eff_button_width,
       h: eff_button_height,
       text: but_label,
+      auto_focus: ii === 0,
     }, cur_button))) {
       did_button = ii;
     }
@@ -1187,15 +1229,13 @@ function modalDialogRun() {
   }
 
   glov_input.eatAllInput();
-  modal_stealing_focus = true;
   if (fullscreen_mode) {
     camera2d.pop();
   }
 }
 
 export function modalTextEntry(param) {
-  let eb = glov_edit_box.create({
-    allow_modal: true,
+  let eb = editBoxCreate({
     initial_focus: true,
     spellcheck: false,
     initial_select: true,
@@ -1247,114 +1287,7 @@ export function modalTextEntry(param) {
 
 
 export function createEditBox(param) {
-  return glov_edit_box.create(param);
-}
-
-let slider_default_vshrink = 1.0;
-let slider_default_handle_shrink = 1.0;
-export function setSliderDefaultShrink(vshrink, handle_shrink) {
-  slider_default_vshrink = vshrink;
-  slider_default_handle_shrink = handle_shrink;
-}
-const color_slider_handle = vec4(1,1,1,1);
-const color_slider_handle_grab = vec4(0.5,0.5,0.5,1);
-const color_slider_handle_over = vec4(0.75,0.75,0.75,1);
-export let slider_dragging = false; // for caller polling
-export let slider_rollover = false; // for caller polling
-// Returns new value
-export function slider(value, param) {
-  // required params
-  assert(typeof param.x === 'number');
-  assert(typeof param.y === 'number');
-  assert(param.min < param.max); // also must be numbers
-  // optional params
-  param.z = param.z || Z.UI;
-  param.w = param.w || button_width;
-  param.h = param.h || button_height;
-  param.max_dist = param.max_dist || Infinity;
-  let vshrink = param.vshrink || slider_default_vshrink;
-  let handle_shrink = param.handle_shrink || slider_default_handle_shrink;
-  let disabled = param.disabled || false;
-  let handle_h = param.h * handle_shrink;
-  let handle_w = sprites.slider_handle.uidata.wh[0] * handle_h;
-
-  slider_dragging = false;
-
-  let shrinkdiff = handle_shrink - vshrink;
-  drawHBox({
-    x: param.x + param.h * shrinkdiff/2,
-    y: param.y + param.h * (1 - vshrink)/2,
-    z: param.z,
-    w: param.w - param.h * shrinkdiff,
-    h: param.h * vshrink,
-  }, sprites.slider, param.color);
-
-  let xoffs = round(max(sprites.slider.uidata.wh[0] * param.h * vshrink, handle_w) / 2);
-  let draggable_width = param.w - xoffs * 2;
-
-  // Draw notches - would also need to quantize the values below
-  // if (!slider->no_notches) {
-  //   float space_for_notches = width - xoffs * 4;
-  //   int num_notches = max - 1;
-  //   float notch_w = tile_scale * glov_ui_slider_notch->GetTileWidth();
-  //   float notch_h = tile_scale * glov_ui_slider_notch->GetTileHeight();
-  //   float max_notches = space_for_notches / (notch_w + 2);
-  //   int notch_inc = 1;
-  //   if (num_notches > max_notches)
-  //     notch_inc = ceil(num_notches / floor(max_notches));
-
-  //   for (int ii = 1; ii*notch_inc <= num_notches; ii++) {
-  //     float notch_x_mid = x + xoffs + draggable_width * ii * notch_inc / (float)max;
-  //     if (notch_x_mid - notch_w/2 < x + xoffs * 2)
-  //       continue;
-  //     if (notch_x_mid + notch_w/2 > x + width - xoffs * 2)
-  //       continue;
-  //     glov_ui_slider_notch->DrawStretchedColor(notch_x_mid - notch_w / 2, y + yoffs,
-  //       z + 0.25, notch_w, notch_h, 0, color);
-  //   }
-  // }
-
-  // Handle
-  let drag = !disabled && glov_input.drag(param);
-  let grabbed = Boolean(drag);
-  let click = glov_input.click(param);
-  if (click) {
-    grabbed = false;
-    // update pos
-    value = (click.pos[0] - (param.x + xoffs)) / draggable_width;
-    value = param.min + (param.max - param.min) * clamp(value, 0, 1);
-    playUISound('button_click');
-  } else if (grabbed) {
-    // update pos
-    value = (drag.cur_pos[0] - (param.x + xoffs)) / draggable_width;
-    value = param.min + (param.max - param.min) * clamp(value, 0, 1);
-    // Eat all mouseovers while dragging
-    glov_input.mouseOver();
-    slider_dragging = true;
-  }
-  let rollover = !disabled && glov_input.mouseOver(param);
-  slider_rollover = rollover;
-  let handle_center_pos = param.x + xoffs + draggable_width * (value - param.min) / (param.max - param.min);
-  let handle_x = handle_center_pos - handle_w / 2;
-  let handle_y = param.y + param.h / 2 - handle_h / 2;
-  let handle_color = color_slider_handle;
-  if (grabbed) {
-    handle_color = color_slider_handle_grab;
-  } else if (rollover) {
-    handle_color = color_slider_handle_over;
-  }
-
-  sprites.slider_handle.draw({
-    x: handle_x,
-    y: handle_y,
-    z: param.z + Z_MIN_INC,
-    w: handle_w,
-    h: handle_h,
-    color: handle_color,
-    frame: 0,
-  });
-
-  return value;
+  return editBoxCreate(param);
 }
 
 let pp_bad_frames = 0;
@@ -1384,16 +1317,10 @@ function releaseOldUIElemData() {
 export function tickUI(dt) {
   last_frame_button_mouseover = frame_button_mouseover;
   frame_button_mouseover = false;
-  focused_last_frame = focused_this_frame;
-  focused_this_frame = false;
-  focused_key_not = null;
-  modal_stealing_focus = false;
-  touch_changed_focus = false;
   per_frame_dom_alloc[glov_engine.frame_index % per_frame_dom_alloc.length] = 0;
   releaseOldUIElemData();
 
-  last_frame_edit_boxes = exports.this_frame_edit_boxes;
-  exports.this_frame_edit_boxes = [];
+  editBoxTick();
   linkTick();
 
   dom_elems_issued = 0;
@@ -1445,6 +1372,7 @@ export function tickUI(dt) {
     pp_bad_frames = 0;
   }
 
+  spotTopOfFrame();
 
   if (modal_dialog) {
     modalDialogRun();
@@ -1452,19 +1380,13 @@ export function tickUI(dt) {
 }
 
 export function endFrame() {
+  spotEndOfFrame();
+
   if (glov_input.click({
     x: -Infinity, y: -Infinity,
     w: Infinity, h: Infinity,
   })) {
-    focusSteal('canvas');
-  }
-
-  for (let ii = 0; ii < last_frame_edit_boxes.length; ++ii) {
-    let edit_box = last_frame_edit_boxes[ii];
-    let idx = exports.this_frame_edit_boxes.indexOf(edit_box);
-    if (idx === -1) {
-      edit_box.unrun();
-    }
+    spotUnfocus();
   }
 
   while (dom_elems_issued < dom_elems.length) {
@@ -1486,7 +1408,6 @@ export function menuUp(param) {
     merge(menu_fade_params, param);
   }
   menu_up = true;
-  modal_stealing_focus = true;
   glov_input.eatAllInput();
 }
 
@@ -1522,7 +1443,7 @@ export function provideUserString(title, str, success_msg, failure_msg) {
   let copy_success = copyTextToClipboard(str);
   modalTextEntry({
     edit_w: 400,
-    edit_text: str,
+    edit_text: str.replace(/[\n\r]/g, ' '),
     title,
     text: copy_success ?
       (success_msg || default_copy_success_msg) :
@@ -1536,7 +1457,7 @@ export function drawRect(x0, y0, x1, y1, z, color) {
   let my = min(y0, y1);
   let Mx = max(x0, x1);
   let My = max(y0, y1);
-  sprites.white.draw({
+  return sprites.white.draw({
     x: mx,
     y: my,
     z,
@@ -1547,7 +1468,25 @@ export function drawRect(x0, y0, x1, y1, z, color) {
 }
 
 export function drawRect2(param) {
-  drawRect(param.x, param.y, param.x + param.w, param.y + param.h, param.z, param.color);
+  return drawRect(param.x, param.y, param.x + param.w, param.y + param.h, param.z, param.color);
+}
+
+export function drawRect4Color(x0, y0, x1, y1, z, color_ul, color_ur, color_ll, color_lr) {
+  let mx = min(x0, x1);
+  let my = min(y0, y1);
+  let Mx = max(x0, x1);
+  let My = max(y0, y1);
+  return sprites.white.draw4Color({
+    x: mx,
+    y: my,
+    z,
+    color_ul,
+    color_ll,
+    color_lr,
+    color_ur,
+    w: Mx - mx,
+    h: My - my,
+  });
 }
 
 function spreadTechParams(spread) {
@@ -1570,7 +1509,7 @@ function drawElipseInternal(sprite, x0, y0, x1, y1, z, spread, tu0, tv0, tu1, tv
   glov_sprites.queueraw(sprite.texs,
     x0, y0, z, x1 - x0, y1 - y0,
     tu0, tv0, tu1, tv1,
-    color, glov_font.font_shaders.font_aa, spreadTechParams(spread), blend);
+    color, glov_font.font_shaders.font_aa, spreadTechParams(spread), blend || BLEND_PREMULALPHA);
 }
 
 function drawCircleInternal(sprite, x, y, z, r, spread, tu0, tv0, tu1, tv1, color, blend) {
@@ -1755,7 +1694,7 @@ export function drawLine(x0, y0, x1, y1, z, w, precise, color, mode) {
     x0 + tangx, y0 + tangy,
     z,
     LINE_U1, LINE_V0, LINE_U2, LINE_V1,
-    color, glov_font.font_shaders.font_aa, shader_param);
+    color, glov_font.font_shaders.font_aa, shader_param, BLEND_PREMULALPHA);
 
   if (mode & (LINE_CAP_ROUND|LINE_CAP_SQUARE)) {
     // round caps (line3) - square caps (line2)
@@ -1768,7 +1707,7 @@ export function drawLine(x0, y0, x1, y1, z, w, precise, color, mode) {
       x1 - tangx + nx, y1 - tangy + ny,
       z,
       LINE_U2, LINE_V1, LINE_U3, LINE_V0,
-      color, glov_font.font_shaders.font_aa, shader_param);
+      color, glov_font.font_shaders.font_aa, shader_param, BLEND_PREMULALPHA);
     glov_sprites.queueraw4(texs,
       x0 - tangx, y0 - tangy,
       x0 + tangx, y0 + tangy,
@@ -1776,7 +1715,7 @@ export function drawLine(x0, y0, x1, y1, z, w, precise, color, mode) {
       x0 - tangx - nx, y0 - tangy - ny,
       z,
       LINE_U1, LINE_V1, LINE_U0, LINE_V0,
-      color, glov_font.font_shaders.font_aa, shader_param);
+      color, glov_font.font_shaders.font_aa, shader_param, BLEND_PREMULALPHA);
   }
 }
 
@@ -1838,7 +1777,7 @@ export function drawCone(x0, y0, x1, y1, z, w0, w1, spread, color) {
     x1 - tangx*w1, y1 - tangy*w1,
     z,
     0, 0, 1, 1,
-    color, glov_font.font_shaders.font_aa, spreadTechParams(spread));
+    color, glov_font.font_shaders.font_aa, spreadTechParams(spread), BLEND_PREMULALPHA);
 }
 
 export function setFontHeight(_font_height) {
@@ -1858,8 +1797,9 @@ export function scaleSizes(scale) {
   modal_pad = round(16 * scale);
   tooltip_width = round(400 * scale);
   tooltip_pad = round(8 * scale);
-  panel_pixel_scale = button_height / 13; // button_height / panel pixel resolution
+  panel_pixel_scale = button_height / sprites.panel.uidata.total_h; // button_height / panel pixel resolution
   tooltip_panel_pixel_scale = panel_pixel_scale;
+  scrollAreaSetPixelScale(button_height / sprites.button.uidata.total_h);
 }
 
 export function setPanelPixelScale(scale) {
@@ -1879,5 +1819,3 @@ export function setTooltipWidth(_tooltip_width, _tooltip_panel_pixel_scale) {
   tooltip_panel_pixel_scale = _tooltip_panel_pixel_scale;
   tooltip_pad = modal_pad / 2 * _tooltip_panel_pixel_scale;
 }
-
-scaleSizes(1);

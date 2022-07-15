@@ -2,19 +2,18 @@
 // Released under MIT License: https://opensource.org/licenses/MIT
 /*eslint no-bitwise:off */
 
-const assert = require('assert');
-const engine = require('./engine.js');
-const glov_font = require('./font.js');
-const ui = require('./ui.js');
-const input = require('./input.js');
+import * as assert from 'assert';
+const { abs, floor, max, min } = Math;
+import { clamp } from 'glov/common/util.js';
+import { vec4 } from 'glov/common/vmath.js';
+import * as engine from './engine.js';
+import * as glov_font from './font.js';
+import * as input from './input.js';
+import * as ui from './ui.js';
 
-window.Z = window.Z || {};
 Z.BACKGROUND = Z.BACKGROUND || 1;
 
 const { KEYS } = input;
-const { abs, floor, max, min } = Math;
-const { vec4 } = require('glov/common/vmath.js');
-const { clamp } = require('glov/common/util.js');
 
 const mode_regex1 = /^((?:\d+;)*\d+m)/u;
 const mode_regex2 = /(\d+)[;m]/gu;

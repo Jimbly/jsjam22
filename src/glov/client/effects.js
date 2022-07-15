@@ -3,6 +3,7 @@
 // Some code from Turbulenz: Copyright (c) 2012-2013 Turbulenz Limited
 // Released under MIT License: https://opensource.org/licenses/MIT
 
+/* eslint-disable import/order */
 const assert = require('assert');
 const engine = require('./engine.js');
 const { renderWidth, renderHeight } = engine;

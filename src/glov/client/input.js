@@ -4,18 +4,8 @@
 // Released under MIT License: https://opensource.org/licenses/MIT
 /* global navigator */
 
+/* eslint-disable import/order */
 const assert = require('assert');
-const { is_firefox, is_mac_osx } = require('./browser.js');
-const camera2d = require('./camera2d.js');
-const { cmd_parse } = require('./cmds.js');
-const engine = require('./engine.js');
-const in_event = require('./in_event.js');
-const local_storage = require('./local_storage.js');
-const { abs, max, min, sqrt } = Math;
-const pointer_lock = require('./pointer_lock.js');
-const settings = require('./settings.js');
-const { soundResume } = require('./sound.js');
-const { vec2, v2add, v2copy, v2lengthSq, v2set, v2scale, v2sub } = require('glov/common/vmath.js');
 
 const UP_EDGE = 0; // only for pads, which use === null as "up"
 const UP = 0; // only for key/mouse
@@ -27,6 +17,9 @@ const TOUCH_AS_MOUSE = true;
 let map_analog_to_dpad = true;
 
 let mouse_log = false;
+
+exports.click = mouseUpEdge; // eslint-disable-line no-use-before-define
+exports.inputClick = mouseUpEdge; // eslint-disable-line no-use-before-define
 
 export const ANY = -2;
 export const POINTERLOCK = -1;
@@ -105,7 +98,30 @@ export const PAD = {
   ANALOG_LEFT: 21,
   ANALOG_DOWN: 22,
   ANALOG_RIGHT: 23,
+  LSTICK_UP: 20,
+  LSTICK_LEFT: 21,
+  LSTICK_DOWN: 22,
+  LSTICK_RIGHT: 23,
+  RSTICK_UP: 24,
+  RSTICK_LEFT: 25,
+  RSTICK_DOWN: 26,
+  RSTICK_RIGHT: 27,
 };
+
+const { is_firefox, is_mac_osx } = require('./browser.js');
+const camera2d = require('./camera2d.js');
+const { cmd_parse } = require('./cmds.js');
+const engine = require('./engine.js');
+const in_event = require('./in_event.js');
+const local_storage = require('./local_storage.js');
+const { abs, max, min, sqrt } = Math;
+const pointer_lock = require('./pointer_lock.js');
+const settings = require('./settings.js');
+const { soundResume } = require('./sound.js');
+const { spotMouseverHook, BUTTON_ANY } = require('./spot.js');
+const { vec2, v2add, v2copy, v2lengthSq, v2set, v2scale, v2sub } = require('glov/common/vmath.js');
+
+assert.equal(BUTTON_ANY, ANY);
 
 let pad_to_touch;
 
@@ -136,6 +152,14 @@ cmd_parse.registerValue('mouse_log', {
   get: () => mouse_log,
   set: (v) => (mouse_log = v),
 });
+
+export function inputTouchMode() {
+  return touch_mode;
+}
+
+export function inputEatenMouse() {
+  return input_eaten_mouse;
+}
 
 function eventTimestamp(event) {
   if (event && event.timeStamp) {
@@ -365,6 +389,7 @@ export function debugGetMouseMoveX() {
 
 let mouse_moved = false;
 let mouse_button_had_edge = false;
+let mouse_button_had_up_edge = false;
 let temp_delta = vec2();
 let last_abs_move = 0;
 let last_abs_move_time = 0;
@@ -520,13 +545,16 @@ function onMouseUp(event) {
     delete mouse_down[button];
   }
   mouse_button_had_edge = true;
+  mouse_button_had_up_edge = true;
   if (!no_click) {
     in_event.handle('mouseup', event);
   }
 }
 
 function onWheel(event) {
+  let saved = mouse_moved; // don't trigger mouseMoved()
   onMouseMove(event, true);
+  mouse_moved = saved;
   let delta = -event.deltaY || event.wheelDelta || -event.detail;
   wheel_events.push({
     pos: [event.pageX, event.pageY],
@@ -579,6 +607,7 @@ function onTouchChange(event) {
     if (!last_touch) {
       last_touch = touches[touch.identifier] = new TouchData(touch_pos, true, 0, event);
       last_touch.down(event, true);
+      mouse_button_had_edge = true;
       in_event.handle('mousedown', touch);
     } else {
       ++old_count;
@@ -607,6 +636,8 @@ function onTouchChange(event) {
         released_ids.push(id);
         in_event.handle('mouseup', { pageX: touch.cur_pos[0], pageY: touch.cur_pos[1] });
         registerMouseUpEdge(touch, eventTimestamp(event));
+        mouse_button_had_edge = true;
+        mouse_button_had_up_edge = true;
         touch.state = UP;
         touch.down_time += timeDelta(event, touch.origin_time);
         touch.release = true;
@@ -649,10 +680,10 @@ function onBlurOrFocus(evt) {
 let ANALOG_MAP = {};
 function genAnalogMap() {
   if (map_analog_to_dpad) {
-    ANALOG_MAP[PAD.LEFT] = PAD.ANALOG_LEFT;
-    ANALOG_MAP[PAD.RIGHT] = PAD.ANALOG_RIGHT;
-    ANALOG_MAP[PAD.UP] = PAD.ANALOG_UP;
-    ANALOG_MAP[PAD.DOWN] = PAD.ANALOG_DOWN;
+    ANALOG_MAP[PAD.LEFT] = [PAD.LSTICK_LEFT, PAD.RSTICK_LEFT];
+    ANALOG_MAP[PAD.RIGHT] = [PAD.LSTICK_RIGHT, PAD.RSTICK_RIGHT];
+    ANALOG_MAP[PAD.UP] = [PAD.LSTICK_UP, PAD.RSTICK_UP];
+    ANALOG_MAP[PAD.DOWN] = [PAD.LSTICK_DOWN, PAD.RSTICK_DOWN];
   }
 }
 
@@ -717,7 +748,7 @@ export function startup(_canvas, params) {
 const DEADZONE = 0.26;
 const DEADZONE_SQ = DEADZONE * DEADZONE;
 const NUM_STICKS = 2;
-const PAD_THRESHOLD = 0.25; // for turning analog motion into digital events
+const PAD_THRESHOLD = 0.35; // for turning analog motion into digital events
 
 function getGamepadData(idx) {
   let gpd = gamepad_data[idx];
@@ -738,6 +769,7 @@ function getGamepadData(idx) {
 function updatePadState(gpd, ps, b, padcode) {
   if (b && !ps[padcode]) {
     ps[padcode] = DOWN_EDGE;
+    onUserInput();
     if (touch_mode) {
       local_storage.set('touch_mode', false);
       touch_mode = false;
@@ -846,10 +878,15 @@ function gamepadUpdate() {
         }
 
         // Calculate virtual directional buttons
-        updatePadState(gpd, ps, gpd.sticks[0][0] < -PAD_THRESHOLD, PAD.ANALOG_LEFT);
-        updatePadState(gpd, ps, gpd.sticks[0][0] > PAD_THRESHOLD, PAD.ANALOG_RIGHT);
-        updatePadState(gpd, ps, gpd.sticks[0][1] < -PAD_THRESHOLD, PAD.ANALOG_DOWN);
-        updatePadState(gpd, ps, gpd.sticks[0][1] > PAD_THRESHOLD, PAD.ANALOG_UP);
+        updatePadState(gpd, ps, gpd.sticks[0][0] < -PAD_THRESHOLD, PAD.LSTICK_LEFT);
+        updatePadState(gpd, ps, gpd.sticks[0][0] > PAD_THRESHOLD, PAD.LSTICK_RIGHT);
+        updatePadState(gpd, ps, gpd.sticks[0][1] < -PAD_THRESHOLD, PAD.LSTICK_DOWN);
+        updatePadState(gpd, ps, gpd.sticks[0][1] > PAD_THRESHOLD, PAD.LSTICK_UP);
+
+        updatePadState(gpd, ps, gpd.sticks[1][0] < -PAD_THRESHOLD, PAD.RSTICK_LEFT);
+        updatePadState(gpd, ps, gpd.sticks[1][0] > PAD_THRESHOLD, PAD.RSTICK_RIGHT);
+        updatePadState(gpd, ps, gpd.sticks[1][1] < -PAD_THRESHOLD, PAD.RSTICK_DOWN);
+        updatePadState(gpd, ps, gpd.sticks[1][1] > PAD_THRESHOLD, PAD.RSTICK_UP);
       }
     }
   }
@@ -960,10 +997,11 @@ export function endFrame(skip_mouse) {
     }
     wheel_events.length = 0;
     input_eaten_mouse = false;
+    mouse_moved = false;
+    mouse_button_had_edge = false;
+    mouse_button_had_up_edge = false;
   }
   input_eaten_kb = false;
-  mouse_moved = false;
-  mouse_button_had_edge = false;
 }
 
 export function tickInputInactive() {
@@ -993,12 +1031,20 @@ export function mousePos(dst) {
   return dst;
 }
 
+export function mouseDomPos() {
+  return mouse_pos;
+}
+
 export function mouseMoved() {
   return mouse_moved;
 }
 
 export function mouseButtonHadEdge() {
   return mouse_button_had_edge;
+}
+
+export function mouseButtonHadUpEdge() {
+  return mouse_button_had_up_edge;
 }
 
 function mousePosParam(param) {
@@ -1053,11 +1099,12 @@ export function mouseOverCaptured() {
 }
 
 export function mouseOver(param) {
-  if (mouse_over_captured || pointerLocked() && !(param && param.allow_pointerlock)) {
-    return false;
-  }
   param = param || {};
   let pos_param = mousePosParam(param);
+  spotMouseverHook(pos_param, param);
+  if (mouse_over_captured || pointerLocked() && !param.allow_pointerlock) {
+    return false;
+  }
 
   // eat mouse up/down/drag events
   if (!param.peek && !param.peek_touch) {
@@ -1233,7 +1280,12 @@ function padButtonShared(fn, padcode, padindex) {
   }
   let ps = pad_states[padindex];
 
-  r += ANALOG_MAP[padcode] && fn(gpd, ps, ANALOG_MAP[padcode]) || 0;
+  let am = ANALOG_MAP[padcode];
+  if (am) {
+    for (let ii = 0; ii < am.length; ++ii) {
+      r += fn(gpd, ps, am[ii]) || 0;
+    }
+  }
   r += fn(gpd, ps, padcode);
   return r;
 }
@@ -1268,6 +1320,10 @@ export function mouseUpEdge(param) {
     if (!touch_data.up_edge) {
       continue;
     }
+    if (touch_data.long_press_dispatched) {
+      // If this touch has already triggered a long-press, do not additionally trigger a click
+      continue;
+    }
     if (!(button === ANY || button === touch_data.button)) {
       continue;
     }
@@ -1295,7 +1351,6 @@ export function mouseUpEdge(param) {
   }
   return false;
 }
-exports.click = mouseUpEdge;
 
 export function mouseDownEdge(param) {
   param = param || {};
@@ -1408,7 +1463,7 @@ export function longPress(param) {
   param = param || {};
   let pos_param = mousePosParam(param);
   let button = pos_param.button;
-  let max_dist = param.max_dist || 0;
+  let max_dist = param.long_press_max_dist || 50;
   let min_time = param.min_time || 500;
 
   for (let touch_id in touches) {

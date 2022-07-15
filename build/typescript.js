@@ -222,6 +222,7 @@ module.exports = function (opts) {
     type: gb.ALL,
     init: typescriptInit,
     func: typescriptFunc,
+    async: gb.ASYNC_FORK,
     version: [opts],
   };
 };

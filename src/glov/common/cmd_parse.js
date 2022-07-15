@@ -1,6 +1,7 @@
 // Portions Copyright 2019 Jimb Esser (https://github.com/Jimbly/)
 // Released under MIT License: https://opensource.org/licenses/MIT
 
+/* eslint-disable import/order */
 const assert = require('assert');
 const { isInteger } = require('./util.js');
 const { perfCounterAdd } = require('./perfcounters.js');
@@ -148,6 +149,7 @@ function formatRangeValue(type, value) {
   return ret;
 }
 
+// Optional param.on_change(is_startup:boolean)
 CmdParse.prototype.registerValue = function (cmd, param) {
   assert(TYPE_NAME[param.type] || !param.set);
   assert(param.set || param.get);
@@ -170,9 +172,9 @@ CmdParse.prototype.registerValue = function (cmd, param) {
       }
       if (init_value !== undefined) {
         param.set(init_value);
-        if (param.on_change) {
-          param.on_change();
-        }
+      }
+      if (param.on_change) {
+        param.on_change(true);
       }
     }
   }
@@ -202,6 +204,10 @@ CmdParse.prototype.registerValue = function (cmd, param) {
           help.push(`To change: /${cmd} NewValue`);
           help.push(`  example: /${cmd} ${param.range ?
             cur_value === param.range[0] ? param.range[1] : param.range[0] : 1}`);
+        }
+        let def_value = param.default_value;
+        if (def_value !== undefined) {
+          help.push(`Default value = ${def_value}${is_bool ? ` (${def_value ? 'Enabled' : 'Disabled'})`: ''}`);
         }
         help.push(`Current value = ${cur_value}${is_bool ? ` (${cur_value ? 'Enabled' : 'Disabled'})`: ''}`);
         return resp_func(null, help.join('\n'));
@@ -241,7 +247,7 @@ CmdParse.prototype.registerValue = function (cmd, param) {
       this.storage.setJSON(store_key, store_value);
     }
     if (param.on_change) {
-      param.on_change();
+      param.on_change(false);
     }
     if (param.get) {
       return value();
@@ -257,6 +263,7 @@ CmdParse.prototype.registerValue = function (cmd, param) {
       param.set ? `Set "${label}" value` : `Display "${label}" value`),
     usage: param.usage || ((param.get ? `Display "${label}" value\n  Usage: /${cmd}\n` : '') +
       (param.set ? `Set "${label}" value\n  Usage: /${cmd} NewValue` : '')),
+    prefix_usage_with_help: param.prefix_usage_with_help,
     access_show: param.access_show,
     access_run: param.access_run,
   });

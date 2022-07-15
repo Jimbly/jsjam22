@@ -3,29 +3,29 @@
 
 /* eslint-env browser */
 
-import { FriendData, FriendStatus, FriendsData } from 'glov/common/friends_data.js';
+import assert from 'assert';
+import { PLATFORM_FBINSTANT } from 'glov/client/client_config';
 import {
   ID_PROVIDER_FB_GAMING,
   ID_PROVIDER_FB_INSTANT,
   PRESENCE_ACTIVE,
   PRESENCE_INACTIVE,
   PRESENCE_OFFLINE,
-} from 'glov/common/enums.js';
-import { ErrorCallback } from 'glov/common/types.js';
+} from 'glov/common/enums';
+import { FriendData, FriendStatus, FriendsData } from 'glov/common/friends_data';
+import {
+  ClientPresenceData,
+  ErrorCallback,
+  FriendCmdResponse,
+  ServerPresenceData,
+} from 'glov/common/types';
+import { deepEqual } from 'glov/common/util';
+import { cmd_parse } from './cmds';
 import { ExternalUserInfo } from './external_user_info';
-import { PLATFORM_FBINSTANT } from 'glov/client/client_config.js';
-import { cmd_parse } from './cmds.js';
-import { deepEqual } from 'glov/common/util.js';
-const assert = require('assert');
-const input = require('./input.js');
-const net = require('./net.js');
-const { netDisconnected } = net;
-const sprites = require('./sprites.js');
-const textures = require('./textures.js');
-
-// TODO: Move this the proper location
-declare interface Presence { active: number, state: unknown, payload: unknown }
-declare type FriendCmdResponse = { msg: string, friend: FriendData };
+import * as input from './input';
+import { netDisconnected, netSubs } from './net';
+import * as sprites from './sprites';
+import * as textures from './textures';
 
 declare let gl: WebGLRenderingContext | WebGL2RenderingContext;
 
@@ -49,14 +49,14 @@ export function friendIsBlocked(user_id: string): boolean {
 
 function makeFriendCmdRequest(cmd: string, user_id: string, cb: ErrorCallback<string>): void {
   user_id = user_id.toLowerCase();
-  let requesting_user_id = net.subs.loggedIn();
+  let requesting_user_id = netSubs().loggedIn();
   if (netDisconnected()) {
     return void cb('ERR_DISCONNECTED');
   }
-  net.subs.getMyUserChannel().cmdParse(`${cmd} ${user_id}`, function (err: string, resp: FriendCmdResponse) {
+  netSubs().getMyUserChannel().cmdParse(`${cmd} ${user_id}`, function (err: string, resp: FriendCmdResponse) {
     if (err) {
       return void cb(err);
-    } else if (requesting_user_id !== net.subs.loggedIn() || !friend_list) {
+    } else if (requesting_user_id !== netSubs().loggedIn() || !friend_list) {
       // Logged out or switched user meanwhile, so ignore the result
       return void cb('Invalid data');
     }
@@ -147,31 +147,31 @@ cmd_parse.registerValue('afk', {
   set: (v: number) => (afk = v),
 });
 
-function onPresence(this: { presence_data: unknown }, data: unknown): void {
-  let user_channel = this; // eslint-disable-line no-invalid-this
+function onPresence(this: { presence_data?: ServerPresenceData }, data: ServerPresenceData): void {
+  let user_channel = this;
   user_channel.presence_data = data;
 }
 
-let last_presence: Presence | null = null;
+let last_presence: ClientPresenceData | null = null;
 let send_queued = false;
 function richPresenceSend(): void {
-  if (!net.subs.loggedIn() || !last_presence || send_queued) {
+  if (!netSubs().loggedIn() || !last_presence || send_queued) {
     return;
   }
   send_queued = true;
-  net.subs.onceConnected(() => {
+  netSubs().onceConnected(() => {
     send_queued = false;
-    if (!net.subs.loggedIn() || !last_presence) {
+    if (!netSubs().loggedIn() || !last_presence) {
       return;
     }
-    let pak = net.subs.getMyUserChannel().pak('presence_set');
+    let pak = netSubs().getMyUserChannel().pak('presence_set');
     pak.writeInt(last_presence.active);
     pak.writeAnsiString(last_presence.state);
     pak.writeJSON(last_presence.payload);
     pak.send();
   });
 }
-export function richPresenceSet(active: number, state: unknown, payload: unknown): void {
+export function richPresenceSet(active: number, state: string, payload?: unknown): void {
   active = !active || afk || (Date.now() - input.inputLastTime() > IDLE_TIME) ? PRESENCE_INACTIVE : PRESENCE_ACTIVE;
   if (invisible) {
     active = PRESENCE_OFFLINE;
@@ -204,7 +204,7 @@ export function getExternalFriendInfos(user_id: string): Record<string, External
 }
 
 export function getExternalUserInfos(user_id: string): Record<string, ExternalUserInfo> | undefined {
-  if (user_id === net.subs.loggedIn()) {
+  if (user_id === netSubs().loggedIn()) {
     return getExternalCurrentUserInfos();
   } else {
     return getExternalFriendInfos(user_id);
@@ -224,8 +224,8 @@ function updateExternalFriendsOnServer(provider: string, to_add: ExternalUserInf
     return;
   }
 
-  let requesting_user_id = net.subs.loggedIn();
-  let pak = net.subs.getMyUserChannel().pak('friend_auto_update');
+  let requesting_user_id = netSubs().loggedIn();
+  let pak = netSubs().getMyUserChannel().pak('friend_auto_update');
   pak.writeAnsiString(provider);
   for (let ii = 0; ii < to_add.length; ++ii) {
     pak.writeAnsiString(to_add[ii].external_id);
@@ -236,7 +236,7 @@ function updateExternalFriendsOnServer(provider: string, to_add: ExternalUserInf
   }
   pak.writeAnsiString('');
   pak.send(function (err: string, resp: Record<string, FriendData>) {
-    if (requesting_user_id !== net.subs.loggedIn() || !friend_list) {
+    if (requesting_user_id !== netSubs().loggedIn() || !friend_list) {
       // Logged out or switched user meanwhile, so ignore the result
       return;
     } else if (err) {
@@ -318,9 +318,9 @@ function setExternalFriends(provider: string, provider_friends: ExternalUserInfo
 
 function requestExternalCurrentUser(provider: string,
   request_func: (cb: ErrorCallback<ExternalUserInfo>) => void): void {
-  let requesting_user_id = net.subs.loggedIn();
+  let requesting_user_id = netSubs().loggedIn();
   request_func((err, user_info) => {
-    if (requesting_user_id !== net.subs.loggedIn()) {
+    if (requesting_user_id !== netSubs().loggedIn()) {
       // Logged out or switched user meanwhile, so ignore the result
       return;
     } else if (err || !user_info) {
@@ -334,9 +334,9 @@ function requestExternalCurrentUser(provider: string,
 
 function requestExternalFriends(provider: string,
   request_func: (cb: ErrorCallback<ExternalUserInfo[]>) => void): void {
-  let requesting_user_id = net.subs.loggedIn();
+  let requesting_user_id = netSubs().loggedIn();
   request_func((err, friends) => {
-    if (requesting_user_id !== net.subs.loggedIn() || !friend_list) {
+    if (requesting_user_id !== netSubs().loggedIn() || !friend_list) {
       // Logged out or switched user meanwhile, so ignore the result
       return;
     } else if (err || !friends) {
@@ -394,7 +394,7 @@ export function registerExternalUserInfoProvider(
 ): void {
   if (get_current_user || get_friends) {
     assert(!friend_list);
-    assert(!net.subs?.loggedIn());
+    assert(!netSubs()?.loggedIn());
 
     external_user_info_providers[provider] = { get_current_user, get_friends };
   } else {
@@ -404,16 +404,16 @@ export function registerExternalUserInfoProvider(
 
 // Init
 export function socialInit(): void {
-  net.subs.on('login', function () {
-    let user_channel = net.subs.getMyUserChannel();
-    let user_id = net.subs.loggedIn();
+  netSubs().on('login', function () {
+    let user_channel = netSubs().getMyUserChannel();
+    let user_id = netSubs().loggedIn();
     richPresenceSend();
     friend_list = null;
     if (netDisconnected()) {
       return;
     }
     user_channel.pak('friend_list').send((err: unknown, resp: FriendsData) => {
-      if (err || user_id !== net.subs.loggedIn()) {
+      if (err || user_id !== netSubs().loggedIn()) {
         // disconnected, etc
         return;
       }
@@ -431,11 +431,11 @@ export function socialInit(): void {
       }
     });
   });
-  net.subs.on('logout', function () {
+  netSubs().on('logout', function () {
     friend_list = null;
     external_current_users = Object.create(null);
     external_friends = Object.create(null);
   });
 
-  net.subs.onChannelMsg('user', 'presence', onPresence);
+  netSubs().onChannelMsg('user', 'presence', onPresence);
 }

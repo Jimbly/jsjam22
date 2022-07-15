@@ -8,10 +8,10 @@
 //     gulp-rename will behave slightly differently)
 
 const assert = require('assert');
-const gb = require('glov-build');
-const { forwardSlashes } = gb;
 const path = require('path');
 const { Transform, Writable } = require('stream');
+const gb = require('glov-build');
+const { forwardSlashes } = require('glov-build');
 const Vinyl = require('vinyl');
 
 function once(f) {

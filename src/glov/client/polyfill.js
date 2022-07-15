@@ -1,4 +1,4 @@
-/* eslint no-extend-native:off,no-invalid-this:off */
+/* eslint no-extend-native:off */
 
 // TypedArray.slice, fill, join, sort, etc - not supported on IE, some older Safari, older Android, Chrome 44
 let typedarrays = [Int8Array, Uint8Array, Int16Array, Uint16Array, Int32Array, Uint32Array, Float32Array];

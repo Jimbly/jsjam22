@@ -1,6 +1,7 @@
 // Portions Copyright 2019 Jimb Esser (https://github.com/Jimbly/)
 // Released under MIT License: https://opensource.org/licenses/MIT
 
+/* eslint-disable import/order */
 const assert = require('assert');
 const { ChannelWorker } = require('./channel_worker.js');
 const { chunkedSend } = require('glov/common/chunked_send.js');
@@ -114,6 +115,22 @@ export class ClientWorker extends ChannelWorker {
     assert(this.client.connected);
     this.logCtx('debug', `Disconnecting client ${this.client_id} due to force_kick message`);
     this.client.ws_server.disconnectClient(this.client);
+  }
+
+  recentlyForceUnsubbed(channel_id) {
+    return this.recent_force_unsub === channel_id;
+  }
+
+  onForceUnsub(source, data) {
+    let { channel_id } = source;
+    this.logDest(channel_id, 'debug', `Unsubscribing client ${this.client_id} due to force_unsub message`);
+    this.unsubscribeOther(channel_id);
+    // Maybe need to let client know too?  Pretty hard since the app logic deals
+    // with subscriptions normally, so expect the app to send some other message
+    // immediately before this one to deal with it gracefully.
+
+    // Note this for later, can silently ignore all messages from client to this channel
+    this.recent_force_unsub = channel_id;
   }
 
   onUpload(source, pak, resp_func) {
@@ -358,6 +375,7 @@ let client_worker_init_data = {
   },
   handlers: {
     force_kick: ClientWorker.prototype.onForceKick,
+    force_unsub: ClientWorker.prototype.onForceUnsub,
     upload: ClientWorker.prototype.onUpload,
     csr_user_to_clientworker: ClientWorker.prototype.onCSRUserToClientWorker,
   },

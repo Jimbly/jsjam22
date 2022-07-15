@@ -230,7 +230,7 @@ function Geom(format, verts, idxs, mode) {
       this.ibo = idxs.ibo;
       this.ibo_owned = false;
       this.ibo_size = idxs.ibo_size;
-    } else {
+    } else if (idxs.length) {
       this.ibo = gl.createBuffer();
       this.ibo_owned = true;
       this.ibo_size = idxs.length;
@@ -238,6 +238,11 @@ function Geom(format, verts, idxs, mode) {
       bound_index_buf = this.ibo;
       gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idxs, gl.STATIC_DRAW);
       engine.perf_state.gpu_mem.geom += idxs.length * 2;
+    } else {
+      // presumably updated later with .updateIndex
+      this.ibo = null;
+      this.ibo_owned = true;
+      this.ibo_size = 0;
     }
   } else if (mode === QUADS) {
     assert.equal(this.vert_count % 4, 0);
@@ -272,6 +277,31 @@ Geom.prototype.updateTriCount = function () {
   this.tri_count = trianglesFromMode(this.mode, eff_vert_count);
 };
 
+Geom.prototype.updateIndex = function (idxs, num_idxs) {
+  assert.equal(this.ibo_owned, true);
+  if (num_idxs > this.ibo_size) {
+    if (bound_geom === this) {
+      bound_geom = null;
+    }
+    engine.perf_state.gpu_mem.geom -= this.ibo_size * 2;
+    deleteBuffer(this.ibo);
+    this.ibo_size = idxs.length;
+    this.ibo = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.ibo);
+    bound_index_buf = this.ibo;
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idxs, gl.DYNAMIC_DRAW);
+    engine.perf_state.gpu_mem.geom += idxs.length * 2;
+  } else {
+    // Fits
+    if (bound_index_buf !== this.ibo) {
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.ibo);
+      bound_index_buf = this.ibo;
+    }
+    gl.bufferSubData(gl.ELEMENT_ARRAY_BUFFER, 0, idxs.subarray(0, num_idxs));
+  }
+  this.updateTriCount();
+};
+
 Geom.prototype.updateSub = function (offset, verts) {
   if (bound_array_buf !== this.vbo) {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.vbo);
@@ -281,7 +311,6 @@ Geom.prototype.updateSub = function (offset, verts) {
 };
 
 Geom.prototype.update = function (verts, num_verts) {
-  assert.equal(this.ibo_owned, false);
   if (num_verts > this.vert_count) {
     if (bound_geom === this) {
       bound_geom = null;
@@ -306,6 +335,7 @@ Geom.prototype.update = function (verts, num_verts) {
     // gl.bufferData(gl.ARRAY_BUFFER, verts, gl.DYNAMIC_DRAW);
   }
   if (this.orig_mode === QUADS) {
+    assert.equal(this.ibo_owned, false);
     let quad_count = num_verts / 4;
     this.ibo = getQuadIndexBuf(quad_count);
     this.ibo_size = quad_count * 6;

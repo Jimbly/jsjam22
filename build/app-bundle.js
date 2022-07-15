@@ -1,10 +1,10 @@
-const argv = require('minimist')(process.argv.slice(2));
 const assert = require('assert');
+const path = require('path');
+const gb = require('glov-build');
 const browserify = require('glov-build-browserify');
 const concat = require('glov-build-concat');
-const gb = require('glov-build');
+const argv = require('minimist')(process.argv.slice(2));
 const uglify = require('./uglify.js');
-const path = require('path');
 
 const uglify_options_ext = { compress: true, keep_fnames: false, mangle: true };
 

@@ -1,5 +1,5 @@
-import { Platform, isValidPlatform } from 'glov/common/enums.js';
 import assert from 'assert';
+import { Platform, isValidPlatform } from 'glov/common/enums';
 
 // Platform
 assert(isValidPlatform(window.conf_platform));

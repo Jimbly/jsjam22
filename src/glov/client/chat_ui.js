@@ -1,5 +1,6 @@
 // Portions Copyright 2020 Jimb Esser (https://github.com/Jimbly/)
 // Released under MIT License: https://opensource.org/licenses/MIT
+/* eslint-disable import/order */
 const assert = require('assert');
 const { asyncParallel } = require('glov-async');
 const camera2d = require('./camera2d.js');
@@ -16,12 +17,10 @@ const { netClient, netClientId, netSubs, netUserId } = require('./net.js');
 const { profanityFilter, profanityStartup } = require('./words/profanity.js');
 const { scrollAreaCreate } = require('./scroll_area.js');
 const settings = require('./settings.js');
+const { spotUnfocus } = require('./spot.js');
 const ui = require('./ui.js');
 const { clamp, matchAll } = require('glov/common/util.js');
 const { vec4, v3copy } = require('glov/common/vmath.js');
-
-const FADE_START_TIME = [10000, 5000];
-const FADE_TIME = [1000, 1000];
 
 const FLAG_EMOTE = 1;
 const FLAG_USERCHAT = 2;
@@ -157,6 +156,7 @@ function ChatUI(params) {
     placeholder: 'Chat',
     initial_focus: false,
     auto_unfocus: true,
+    spatial_focus: false,
     max_len: params.max_len,
     text: '',
   });
@@ -181,15 +181,21 @@ function ChatUI(params) {
   });
   this.w = params.w || engine.game_width / 2;
   this.h = params.h || engine.game_height / 2; // excluding text entry
+  this.inner_width_adjust = params.inner_width_adjust || 0;
   this.border = params.border || undefined;
   this.volume_join_leave = params.volume_join_leave || 0.15;
   this.volume_in = params.volume_in || 0.5;
   this.volume_out = params.volume_out || 0.5;
+  this.msg_out_err_delay = params.msg_out_err_delay || 0; // Delay when playing msg_out_err after msg_out.
   this.history = new CmdHistory();
   this.get_roles = defaultGetRoles; // returns object for testing cmd access permissions
   this.url_match = params.url_match; // runs `/url match[1]` if clicked
   this.url_info = params.url_info; // Optional for grabbing the interesting portion of the URL for tooltip and /url
   this.user_context_cb = params.user_context_cb; // Cb called with { user_id } on click
+
+  this.fade_start_time = params.fade_start_time || [10000, 1000];
+  this.fade_time = params.fade_time || [1000, 500];
+
   this.setActiveSize(this.font_height, this.w);
   let outline_width = params.outline_width || 1;
 
@@ -568,8 +574,7 @@ function drawHelpTooltip(param) {
 }
 
 ChatUI.prototype.isFocused = function () {
-  return this.edit_text_entry && this.edit_text_entry.isFocused() ||
-    this.scroll_area && this.scroll_area.isFocused();
+  return this.edit_text_entry && this.edit_text_entry.isFocused();
 };
 
 ChatUI.prototype.sendChat = function (flags, text) {
@@ -595,10 +600,10 @@ ChatUI.prototype.sendChat = function (flags, text) {
           });
         } else {
           this.addChatError(err);
+          if (!this.edit_text_entry.getText()) {
+            this.edit_text_entry.setText(text);
+          }
         }
-        // if (!this.edit_text_entry.getText()) {
-        //   this.edit_text_entry.setText(text);
-        // }
       }
     });
   }
@@ -621,6 +626,15 @@ ChatUI.prototype.run = function (opts) {
       ui.font_height, glov_font.ALIGN.HVCENTER, camera2d.w(), camera2d.h() * 0.20,
       `Connection lost, attempting to reconnect (${(netClient().timeSinceDisconnect()/1000).toFixed(0)})...`);
   }
+
+  // Test sending a stream of chat
+  // if (engine.defines.CHATTER) {
+  //   this.chatter_countdown = (this.chatter_countdown || 0) - engine.frame_dt;
+  //   if (this.chatter_countdown < 0) {
+  //     this.sendChat(0, `Something random ${Math.random()}`);
+  //     this.chatter_countdown = 1000 * Math.random();
+  //   }
+  // }
 
   if (!this.did_run_late) {
     this.runLate();
@@ -652,7 +666,7 @@ ChatUI.prototype.run = function (opts) {
     }
     font_height *= font_scale;
   }
-  const inner_w = outer_w - border;
+  const inner_w = outer_w - border + this.inner_width_adjust;
   this.setActiveSize(font_height, inner_w); // may recalc numlines on each elem; updates wrap_w
   if (!hide_text_input) {
     anything_visible = true;
@@ -665,7 +679,7 @@ ChatUI.prototype.run = function (opts) {
       if (was_focused) {
         // Do auto-complete logic *before* edit box, so we can eat TAB without changing focus
         // Eat tab even if there's nothing to complete, for consistency
-        let pressed_tab = input.keyDownEdge(input.KEYS.TAB);
+        let pressed_tab = !input.keyDown(input.KEYS.SHIFT) && input.keyDownEdge(input.KEYS.TAB);
         if (pressed_tab) {
           this.edit_text_entry.focus();
         }
@@ -748,6 +762,7 @@ ChatUI.prototype.run = function (opts) {
         this.scroll_area.scrollToEnd();
         let text = this.edit_text_entry.getText().trim();
         if (text) {
+          let start_time = Date.now();
           this.edit_text_entry.setText('');
           if (text[0] === '/') {
             if (text[1] === '/') { // common error of starting with //foo because chat was already focused
@@ -762,7 +777,10 @@ ChatUI.prototype.run = function (opts) {
                 return;
               }
               if (this.volume_out) {
-                ui.playUISound('msg_out_err', this.volume_out);
+                setTimeout(
+                  () => ui.playUISound('msg_out_err', this.volume_out),
+                  max(0, this.msg_out_err_delay * 1000 - (Date.now() - start_time))
+                );
               }
               if (!this.edit_text_entry.getText()) {
                 // this.history.unadd(text);
@@ -780,11 +798,11 @@ ChatUI.prototype.run = function (opts) {
           }
           if (settings.chat_auto_unfocus) {
             is_focused = false;
-            ui.focusCanvas();
+            spotUnfocus();
           }
         } else {
           is_focused = false;
-          ui.focusCanvas();
+          spotUnfocus();
         }
       }
     }
@@ -865,7 +883,7 @@ ChatUI.prototype.run = function (opts) {
     // Draw the actual text
     ui.font.drawSizedWrapped(glov_font.styleAlpha(style, alpha), x, y, z + 1, wrap_w, self.indent, font_height, line);
 
-    if (mouseover && (!do_scroll_area || y > self.scroll_area.scroll_pos - font_height) &&
+    if (mouseover && (!do_scroll_area || y > self.scroll_area.getScrollPos() - font_height) &&
       // Only show tooltip for user messages or links
       (!msg.style || msg.style === 'def' || is_url)
     ) {
@@ -924,7 +942,7 @@ ChatUI.prototype.run = function (opts) {
     let y_save = y;
     x = clip_offs;
     y = 0;
-    let y_min = this.scroll_area.scroll_pos;
+    let y_min = this.scroll_area.getScrollPos();
     let y_max = y_min + scroll_external_h;
     for (let ii = 0; ii < this.msgs.length; ++ii) {
       let msg = this.msgs[ii];
@@ -943,7 +961,7 @@ ChatUI.prototype.run = function (opts) {
     if (input.mouseUpEdge({ x: x0, y: y - border, w: outer_w, h: y1 - y + border,
       in_event_cb: opts.pointerlock ? input.pointerLockEnter : null })
     ) {
-      ui.focusCanvas();
+      spotUnfocus();
       is_focused = false;
     }
     // Also prevent mouseover from going to anything beneat it
@@ -952,7 +970,7 @@ ChatUI.prototype.run = function (opts) {
     if (input.mouseDownEdge({ peek: true })) {
       // On touch, tapping doesn't always remove focus from the edit box!
       // Maybe this logic should be in the editbox logic?
-      ui.focusCanvas();
+      spotUnfocus();
       is_focused = false;
     }
   } else {
@@ -961,7 +979,7 @@ ChatUI.prototype.run = function (opts) {
     for (let ii = 0; ii < this.msgs.length; ++ii) {
       let msg = this.msgs[this.msgs.length - ii - 1];
       let age = now - msg.timestamp;
-      let alpha = 1 - clamp((age - FADE_START_TIME[hide_light]) / FADE_TIME[hide_light], 0, 1);
+      let alpha = 1 - clamp((age - this.fade_start_time[hide_light]) / this.fade_time[hide_light], 0, 1);
       if (!alpha || msg.quiet) {
         break;
       }

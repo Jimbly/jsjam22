@@ -2,6 +2,7 @@ export let LOAD_ESTIMATE = {
   def: 10, // 1% CPU
 };
 
+/* eslint-disable import/order */
 import {
   VersionSupport,
   getFallbackEnvironment,
@@ -11,7 +12,7 @@ import {
   setFallbackEnvironments,
   setLatestVersions,
 } from './version_management';
-import { getPlatformValues, isValidPlatform } from 'glov/common/enums.js';
+import { getPlatformValues, isValidPlatform } from 'glov/common/enums';
 
 const assert = require('assert');
 const { channelServerSendNoCreate, LOAD_REPORT_INTERVAL } = require('./channel_server.js');
@@ -45,6 +46,16 @@ const LOAD_AVAILABLE = 1000;
 
 const READY_DATA_CHANNEL = 'global.ready_data';
 const READY_DATA_KEY = 'private.ready_data';
+
+const RESTART_REASONS = {
+  default: 'Might be a game update',
+  update: 'New game update',
+  bugs: 'Bug fixes',
+  maint: 'Maintenance',
+};
+const RESTART_REASONS_HELP = Object.keys(RESTART_REASONS)
+  .map((key) => `    ${key} = "${RESTART_REASONS[key]}"`)
+  .join('\n');
 
 class MasterWorker extends ChannelWorker {
   constructor(channel_server, channel_id, channel_data) {
@@ -458,10 +469,31 @@ class MasterWorker extends ChannelWorker {
     }
   }
   cmdMasterRestartCountdown(value, resp_func) {
-    let seconds = Number(value) || 10;
+    if (!value) {
+      value = '30';
+    }
+    let space_idx = value.indexOf(' ');
+    if (space_idx === -1) {
+      value += ' default';
+      space_idx = value.indexOf(' ');
+    }
+    let seconds = Number(value.slice(0, space_idx));
+    let reason = value.slice(space_idx+1);
+    if (!seconds || !isFinite(seconds)) {
+      return void resp_func('Invalid SECONDS parameter');
+    }
+    if (reason.includes(' ')) {
+      // custom message, let it through
+    } else {
+      if (!RESTART_REASONS[reason]) {
+        return void resp_func('Invalid REASON parameter: expected one of ' +
+          `${Object.keys(RESTART_REASONS)}, or to include a space`);
+      }
+      reason = RESTART_REASONS[reason];
+    }
     this.sendChannelMessage('channel_server', 'chat_broadcast', {
       src: 'system',
-      msg: `Server restarting in ${seconds} ${plural(seconds, 'second')}...`,
+      msg: `Server restarting in ${seconds} ${plural(seconds, 'second')}... (${reason})`,
     });
     if (this.restart_countdown_id) {
       clearInterval(this.restart_countdown_id);
@@ -474,7 +506,7 @@ class MasterWorker extends ChannelWorker {
       } else if (seconds <= 5 || (seconds % 10 === 0)) {
         this.sendChannelMessage('channel_server', 'chat_broadcast', {
           src: 'system',
-          msg: `Server restarting in ${seconds} ${plural(seconds, 'second')}...`,
+          msg: `Server restarting in ${seconds} ${plural(seconds, 'second')}... (${reason})`,
         });
       }
     }, 1000);
@@ -512,7 +544,7 @@ class MasterWorker extends ChannelWorker {
     }
     let { master_ready_servers, master_ready_server_time, master_ready_timeout } = serverConfig();
     let now = this.channel_server.server_time;
-    if (this.master_startup_time + master_ready_timeout < now) {
+    if (this.master_startup_time + master_ready_timeout <= now) {
       // It's been more than the timeout, assume everything is ready, or as ready as it's going to be
       return void reply(null, 'default');
     }
@@ -539,7 +571,7 @@ class MasterWorker extends ChannelWorker {
       this.sendChannelMessage('channel_server', 'chat_broadcast', {
         sysadmin: 1,
         src: 'system',
-        msg: 'Build system is ready to deploy!  After pushing build live on Facebook, run /master_restart_countdown 10',
+        msg: 'Build system is ready to deploy!  After pushing build live on Facebook, run /master_restart_countdown 30',
       });
     }
     if (this.deploy_ready_count >= 3 || this.deploy_ready_force) {
@@ -725,6 +757,11 @@ export function init(channel_server) {
     }, {
       cmd: 'master_restart_countdown',
       help: 'Start a countdown to server restart',
+      prefix_usage_with_help: true,
+      usage: 'Usage: /master_restart_countdown [SECONDS] [REASON]\n' +
+        '  Defaults: /master_restart_countdown 30 default\n' +
+        '  REASON can be any custom string or one of the following:\n' +
+        `${RESTART_REASONS_HELP}`,
       access_run: ['sysadmin'],
       func: MasterWorker.prototype.cmdMasterRestartCountdown,
     }, {
@@ -793,9 +830,9 @@ export function init(channel_server) {
   });
 }
 
-export function masterInitApp(channel_server, app) {
+export function masterInitApp(channel_server, app, argv) {
   let ready_cache_expires = 0;
-  let ready_cache_err = 'ERR_STARTUP';
+  let ready_cache_err = argv.dev ? null : 'ERR_STARTUP';
   let ready_check_in_flight = null;
   const READY_CACHE_TIME_READY = 10000;
   const READY_CACHE_TIME_UNREADY = 1000;
