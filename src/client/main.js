@@ -2098,6 +2098,7 @@ const MENU_BUTTON_W = 96;
 const MENU_BUTTON_H = 22;
 
 let scores_edit_box;
+let scores_scroll;
 function stateHighScores() {
   v4copy(engine.border_clear_color, pico8.colors[11]);
   gl.clearColor(...pico8.colors[11]);
@@ -2131,10 +2132,10 @@ function stateHighScores() {
     widths[ii] *= (width - set_pad * (widths.length - 1)) / widths_total;
   }
   let align = [
-    font.ALIGN.HFIT | font.ALIGN.HRIGHT,
-    font.ALIGN.HFIT,
-    font.ALIGN.HFIT | font.ALIGN.HCENTER,
-    font.ALIGN.HFIT | font.ALIGN.HCENTER,
+    font.ALIGN.HFIT | font.ALIGN.HRIGHT | font.ALIGN.VCENTER,
+    font.ALIGN.HFIT | font.ALIGN.VCENTER,
+    font.ALIGN.HFIT | font.ALIGN.HCENTER | font.ALIGN.VCENTER,
+    font.ALIGN.HFIT | font.ALIGN.HCENTER | font.ALIGN.VCENTER,
   ];
   let line_advance = size;
   function drawSet(arr, use_style, header) {
@@ -2147,7 +2148,7 @@ function stateHighScores() {
         });
       } else {
         let str = String(arr[ii]);
-        font.drawSizedAligned(use_style, xx, y, z, size, align[ii], widths[ii], 0, str);
+        font.drawSizedAligned(use_style, xx, y, z, size, align[ii], widths[ii], line_advance, str);
       }
       xx += widths[ii] + set_pad;
     }
@@ -2157,8 +2158,33 @@ function stateHighScores() {
   line_advance = TILE_SIZE + 1;
   y += 2;
   ui.drawLine(x, y, x+width, y, z, 1, 1, pico8.colors[0]);
-  y += 4;
+  y += 1;
+  const scores_scroll_h = game_height - (MENU_BUTTON_H + pad)*2 - y;
+  if (!scores_scroll) {
+    scores_scroll = scrollAreaCreate({
+      x, y, w: width + 12, h: scores_scroll_h,
+      rate_scroll_click: line_advance,
+      background_color: null,
+      auto_hide: true,
+    });
+  }
+  scores_scroll.begin();
+  let scroll_pos = round(scores_scroll.getScrollPos());
+  let scroll_y0 = scroll_pos - line_advance * 2;
+  let scroll_y1 = scroll_pos + scores_scroll_h + line_advance;
+  let scroll_min_visible_y = scroll_pos;
+  let scroll_max_visible_y = scroll_pos + scores_scroll_h - line_advance + 1;
+  let y_save = y;
+  let x_save = x;
+  x = 0;
+  y = 0;
   let found_me = false;
+  function drawScoreEntry(ii, s, use_style) {
+    drawSet([
+      `#${ii+1}`, score_system.formatName(s), s.score.tech,
+      timeFormat(s.score.ticks)
+    ], use_style);
+  }
   for (let ii = 0; ii < scores.length; ++ii) {
     let s = scores[ii % scores.length];
     let use_style = score_style;
@@ -2168,14 +2194,29 @@ function stateHighScores() {
       found_me = true;
       drawme = true;
     }
-    if (ii < 16 || drawme) {
-      drawSet([
-        `#${ii+1}`, score_system.formatName(s), s.score.tech,
-        timeFormat(s.score.ticks)
-      ], use_style);
+    if (drawme) {
+      let y_save2 = y;
+      if (y < scroll_min_visible_y) {
+        y = scroll_min_visible_y;
+      } else if (y > scroll_max_visible_y) {
+        y = scroll_max_visible_y;
+      }
+      z += 20;
+      ui.drawRect(x, y, x + width + 1, y + line_advance - 1, z - 1, pico8.colors[1]);
+      drawScoreEntry(ii, s, use_style);
+      z -= 20;
+      y = y_save2 + line_advance;
+    } else if (y >= scroll_y0 && y <= scroll_y1) {
+      drawScoreEntry(ii, s, use_style);
+    } else {
+      y += line_advance;
     }
   }
-  y += set_pad;
+  y += set_pad/2;
+  scores_scroll.end(y);
+  x = x_save;
+  y = y_save + min(scores_scroll_h, y);
+  y += set_pad/2;
   if (found_me && score_system.player_name.indexOf('Anonymous') === 0) {
     if (!scores_edit_box) {
       scores_edit_box = ui.createEditBox({
