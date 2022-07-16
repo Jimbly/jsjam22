@@ -27,6 +27,8 @@ export enum Platform {
   IOS = 'ios',
   Web = 'web',
   Yandex = 'yandex',
+  Crazy = 'crazy',
+  Itch = 'itch',
 }
 export function getPlatformValues(): Platform[] {
   return getStringEnumValues(Platform);

@@ -24,6 +24,7 @@ const { createSpriteAnimation } = require('glov/client/sprite_animation.js');
 const transition = require('glov/client/transition.js');
 const { createTransitioner } = require('./transitioner.js');
 const ui = require('glov/client/ui.js');
+const { uiGetDOMElem } = ui;
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const { clamp, clone, lerp, easeInOut, easeIn, easeOut, ridx } = require('glov/common/util.js');
 const { vec2, vec4, v4copy, v4set } = require('glov/common/vmath.js');
@@ -634,7 +635,24 @@ let level_list = [{
   name: 'the',
 }];
 
+let crazysdk;
+function crazy() {
+  if (!crazysdk && window.CrazyGames) {
+    crazysdk = window.CrazyGames.CrazySDK.getInstance(); // getting the SDK
+    crazysdk.init(); // initializing the SDK, call as early as possible
+    crazysdk.addEventListener('bannerRendered', (event) => {
+      console.log(`Banner for container ${event.containerId} has been
+        rendered!`);
+    });
+    crazysdk.addEventListener('bannerError', (event) => {
+      console.log(`Banner render error: ${event.error}`);
+    });
+  }
+  return crazysdk;
+}
+
 function init() {
+  crazy();
   sprites.tiles = createSprite({
     name: 'tiles',
     ws: [TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE, TILE_SIZE],
@@ -2095,6 +2113,8 @@ let transitioner = createTransitioner({
   interactable_at: 100,
 });
 
+let banner_ad;
+
 const MENU_BUTTON_W = 96;
 const MENU_BUTTON_H = 22;
 function drawCellTech(param) {
@@ -2165,6 +2185,24 @@ function stateHighScores() {
   // });
   // ui.menuUp();
 
+  if (crazy()) {
+    let elem = uiGetDOMElem(banner_ad);
+    if (elem && elem !== banner_ad) {
+      // init
+      banner_ad = elem;
+      elem.style.top = '2%';
+      elem.style.height = '96%';
+      elem.id = 'banner-hs-right';
+      crazy().requestResponsiveBanner([elem.id]);
+    }
+    let banner_x = x + width + pad;
+    let pos = camera2d.htmlPos(banner_x, 0);
+    elem.style.left = `${pos[0]}%`;
+    let virt = [0,0];
+    camera2d.domToVirtual(virt, [engine.width, 0]);
+    let dims = camera2d.htmlSize(virt[0] - banner_x - pad, 0);
+    elem.style.width = `${dims[0]}%`;
+  }
 
   let button_x = (game_width - MENU_BUTTON_W) / 2;
   if (high_score_from_victory) {

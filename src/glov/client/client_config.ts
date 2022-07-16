@@ -1,10 +1,10 @@
 import assert from 'assert';
-import { Platform, isValidPlatform } from 'glov/common/enums';
+import { Platform } from 'glov/common/enums';
 
 // Platform
-assert(isValidPlatform(window.conf_platform));
+//assert(isValidPlatform(window.conf_platform));
 export const PLATFORM = window.conf_platform as Platform;
-export const PLATFORM_WEB = PLATFORM === Platform.Web;
+export const PLATFORM_WEB = true; // PLATFORM === Platform.Web;
 export const PLATFORM_FBINSTANT = PLATFORM === Platform.FBInstant;
 export const PLATFORM_ANDROID = PLATFORM === Platform.Android;
 export const PLATFORM_IOS = PLATFORM === Platform.IOS;
