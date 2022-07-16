@@ -2192,16 +2192,13 @@ function stateHighScores() {
       banner_ad = elem;
       elem.style.top = '2%';
       elem.style.height = '96%';
+      elem.style.right = '1%';
       elem.id = 'banner-hs-right';
       crazy().requestResponsiveBanner([elem.id]);
     }
     let banner_x = x + width + pad;
     let pos = camera2d.htmlPos(banner_x, 0);
     elem.style.left = `${pos[0]}%`;
-    let virt = [0,0];
-    camera2d.domToVirtual(virt, [engine.width, 0]);
-    let dims = camera2d.htmlSize(virt[0] - banner_x - pad, 0);
-    elem.style.width = `${dims[0]}%`;
   }
 
   let button_x = (game_width - MENU_BUTTON_W) / 2;
@@ -2393,6 +2390,7 @@ export function main() {
       button: { name: 'button', ws: [4,14,4], hs: [22] },
       button_down: { name: 'button_down', ws: [4,14,4], hs: [22] },
       button_disabled: { name: 'button_disabled', ws: [4,14,4], hs: [22] },
+      panel: { name: 'panel', ws: [3, 2, 3], hs: [3, 10, 3] },
     },
     ui_sounds: {
       // user actions
