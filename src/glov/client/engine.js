@@ -799,8 +799,10 @@ function tick(timestamp) {
     profilerStop();
     return profilerStop('tick');
   }
-  in_background = false;
-  soundResume();
+  if (in_background) {
+    in_background = false;
+    soundResume();
+  }
 
   checkResize();
   had_3d_this_frame = false;

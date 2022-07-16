@@ -5,7 +5,7 @@ local_storage.setStoragePrefix('jsjam22'); // Before requiring anything else tha
 const assert = require('assert');
 const camera2d = require('glov/client/camera2d.js');
 const engine = require('glov/client/engine.js');
-const { style, styleAlpha, styleColored } = require('glov/client/font.js');
+const { ALIGN, style, styleAlpha, styleColored } = require('glov/client/font.js');
 const input = require('glov/client/input.js');
 const { KEYS } = input;
 const { abs, floor, max, min, sin, random, round, PI } = Math;
@@ -15,6 +15,7 @@ const { preloadParticleData } = require('glov/client/particles.js');
 const pico8 = require('glov/client/pico8.js');
 const { mashString, randCreate } = require('glov/common/rand_alea.js');
 const score_system = require('glov/client/score.js');
+const { drawCellDefault, scoresDraw } = require('glov/client/score_ui.js');
 const { scrollAreaCreate } = require('glov/client/scroll_area.js');
 const settings = require('glov/client/settings.js');
 const { soundPlayMusic } = require('glov/client/sound.js');
@@ -2096,9 +2097,30 @@ let transitioner = createTransitioner({
 
 const MENU_BUTTON_W = 96;
 const MENU_BUTTON_H = 22;
-
-let scores_edit_box;
-let scores_scroll;
+function drawCellTech(param) {
+  let { value, x, y, z, w, h } = param;
+  if (typeof value === 'number') {
+    sprites.tiles.draw({
+      x: x + floor((w - TILE_SIZE)/2), y: y + floor((h - TILE_SIZE)/2), z,
+      frame: RESOURCE_FRAMES[value],
+    });
+  } else {
+    drawCellDefault(param);
+  }
+}
+const SCORE_COLUMNS = [
+  // widths are just proportional, scaled relative to `width` passed in
+  { name: '', width: 12, align: ALIGN.HFIT | ALIGN.HRIGHT | ALIGN.VCENTER },
+  { name: 'Name', width: 60, align: ALIGN.HFIT | ALIGN.VCENTER },
+  { name: 'Tech', width: 24, draw: drawCellTech },
+  { name: 'Time', width: 24 },
+];
+const style_score = styleColored(null, pico8.font_colors[1]);
+const style_me = styleColored(null, pico8.font_colors[8]);
+const style_header = styleColored(null, pico8.font_colors[5]);
+function myScoreToRow(row, score) {
+  row.push(score.tech, timeFormat(score.ticks));
+}
 function stateHighScores() {
   v4copy(engine.border_clear_color, pico8.colors[11]);
   gl.clearColor(...pico8.colors[11]);
@@ -2109,143 +2131,29 @@ function stateHighScores() {
   let z = Z.UI + 10;
   let size = 8;
   let pad = size;
+  let level_id = 'the';
+
   title_font.drawSizedAligned(styleColored(null, pico8.font_colors[0]),
     x, y, z, size * 2, font.ALIGN.HCENTERFIT, width, 0, 'HIGH SCORES');
   y += size * 2 + 2;
   ui.drawLine(x + 130, y, x+width - 130, y, z, 1, 1, pico8.colors[5]);
   y += 4;
-  let level_id = 'the';
-  let scores = score_system.high_scores[level_id];
-  let score_style = styleColored(null, pico8.font_colors[1]);
-  if (!scores) {
-    font.drawSizedAligned(score_style, x, y, z, size, font.ALIGN.HCENTERFIT, width, 0,
-      'Loading...');
-    return;
-  }
-  let widths = [12, 60, 24, 24];
-  let widths_total = 0;
-  for (let ii = 0; ii < widths.length; ++ii) {
-    widths_total += widths[ii];
-  }
-  let set_pad = size / 2;
-  for (let ii = 0; ii < widths.length; ++ii) {
-    widths[ii] *= (width - set_pad * (widths.length - 1)) / widths_total;
-  }
-  let align = [
-    font.ALIGN.HFIT | font.ALIGN.HRIGHT | font.ALIGN.VCENTER,
-    font.ALIGN.HFIT | font.ALIGN.VCENTER,
-    font.ALIGN.HFIT | font.ALIGN.HCENTER | font.ALIGN.VCENTER,
-    font.ALIGN.HFIT | font.ALIGN.HCENTER | font.ALIGN.VCENTER,
-  ];
-  let line_advance = size;
-  function drawSet(arr, use_style, header) {
-    let xx = x;
-    for (let ii = 0; ii < arr.length; ++ii) {
-      if (ii === 2 && typeof arr[ii] === 'number') {
-        sprites.tiles.draw({
-          x: xx + (widths[ii] - TILE_SIZE)/2, y: y, z,
-          frame: RESOURCE_FRAMES[arr[ii]],
-        });
-      } else {
-        let str = String(arr[ii]);
-        font.drawSizedAligned(use_style, xx, y, z, size, align[ii], widths[ii], line_advance, str);
-      }
-      xx += widths[ii] + set_pad;
-    }
-    y += line_advance;
-  }
-  drawSet(['', 'Name', 'Tech', 'Time'], styleColored(null, pico8.font_colors[5]), true);
-  line_advance = TILE_SIZE + 1;
-  y += 2;
-  ui.drawLine(x, y, x+width, y, z, 1, 1, pico8.colors[0]);
-  y += 1;
-  const scores_scroll_h = game_height - (MENU_BUTTON_H + pad)*2 - y;
-  if (!scores_scroll) {
-    scores_scroll = scrollAreaCreate({
-      x, y, w: width + 12, h: scores_scroll_h,
-      rate_scroll_click: line_advance,
-      background_color: null,
-      auto_hide: true,
-    });
-  }
-  scores_scroll.begin();
-  let scroll_pos = round(scores_scroll.getScrollPos());
-  let scroll_y0 = scroll_pos - line_advance * 2;
-  let scroll_y1 = scroll_pos + scores_scroll_h + line_advance;
-  let scroll_min_visible_y = scroll_pos;
-  let scroll_max_visible_y = scroll_pos + scores_scroll_h - line_advance + 1;
-  let y_save = y;
-  let x_save = x;
-  x = 0;
-  y = 0;
-  let found_me = false;
-  function drawScoreEntry(ii, s, use_style) {
-    drawSet([
-      `#${ii+1}`, score_system.formatName(s), s.score.tech,
-      timeFormat(s.score.ticks)
-    ], use_style);
-  }
-  for (let ii = 0; ii < scores.length; ++ii) {
-    let s = scores[ii % scores.length];
-    let use_style = score_style;
-    let drawme = false;
-    if (s.name === score_system.player_name && !found_me) {
-      use_style = styleColored(null, pico8.font_colors[8]);
-      found_me = true;
-      drawme = true;
-    }
-    if (drawme) {
-      let y_save2 = y;
-      if (y < scroll_min_visible_y) {
-        y = scroll_min_visible_y;
-      } else if (y > scroll_max_visible_y) {
-        y = scroll_max_visible_y;
-      }
-      z += 20;
-      ui.drawRect(x, y, x + width + 1, y + line_advance - 1, z - 1, pico8.colors[1]);
-      drawScoreEntry(ii, s, use_style);
-      z -= 20;
-      y = y_save2 + line_advance;
-    } else if (y >= scroll_y0 && y <= scroll_y1) {
-      drawScoreEntry(ii, s, use_style);
-    } else {
-      y += line_advance;
-    }
-  }
-  y += set_pad/2;
-  scores_scroll.end(y);
-  x = x_save;
-  y = y_save + min(scores_scroll_h, y);
-  y += set_pad/2;
-  if (found_me && score_system.player_name.indexOf('Anonymous') === 0) {
-    if (!scores_edit_box) {
-      scores_edit_box = ui.createEditBox({
-        z,
-        w: game_width / 4,
-      });
-      scores_edit_box.setText(score_system.player_name);
-    }
 
-    if (scores_edit_box.run({
-      x,
-      y,
-    }) === scores_edit_box.SUBMIT || ui.buttonText({
-      x: x + scores_edit_box.w + size,
-      y: y - size * 0.25,
-      z,
-      w: size * 13,
-      h: ui.button_height,
-      text: 'Update Player Name'
-    })) {
-      // scores_edit_box.text
-      if (scores_edit_box.text) {
-        score_system.updatePlayerName(scores_edit_box.text);
-      }
-    }
-    y += size;
-  }
-
-  y += pad;
+  const scores_list_max_y = game_height - (MENU_BUTTON_H + pad);
+  const height = scores_list_max_y - y;
+  y = scoresDraw({
+    size, line_height: TILE_SIZE + 1,
+    x, y, z,
+    width, height,
+    level_id,
+    columns: SCORE_COLUMNS,
+    scoreToRow: myScoreToRow,
+    style_score,
+    style_me,
+    style_header,
+    color_line: pico8.colors[0],
+    color_me_background: pico8.colors[1],
+  });
 
   // ui.panel({
   //   x: x - pad,
@@ -2255,8 +2163,8 @@ function stateHighScores() {
   //   z: z - 1,
   //   color: vec4(0, 0, 0, 1),
   // });
-
   // ui.menuUp();
+
 
   let button_x = (game_width - MENU_BUTTON_W) / 2;
   if (high_score_from_victory) {
