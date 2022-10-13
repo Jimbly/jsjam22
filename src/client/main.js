@@ -2196,9 +2196,11 @@ function stateHighScores() {
       elem.id = 'banner-hs-right';
       crazy().requestResponsiveBanner([elem.id]);
     }
-    let banner_x = x + width + pad;
-    let pos = camera2d.htmlPos(banner_x, 0);
-    elem.style.left = `${pos[0]}%`;
+    if (elem) {
+      let banner_x = x + width + pad;
+      let pos = camera2d.htmlPos(banner_x, 0);
+      elem.style.left = `${pos[0]}%`;
+    }
   }
 
   let button_x = (game_width - MENU_BUTTON_W) / 2;
