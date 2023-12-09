@@ -9,7 +9,12 @@ function EventEmitter() {
 }
 
 module.exports = EventEmitter;
-module.exports.EventEmitter = EventEmitter;
+// Also "export" `EventEmitter` so you can do `import { EventEmitter } from 'tiny-events.js'` but
+//   not pollute the prototype (would show up for all classes that `extend EventEmitter`).
+Object.defineProperty(module.exports, 'EventEmitter', {
+  value: EventEmitter,
+  enumerable: false,
+});
 
 function addListener(ee, type, fn, once) {
   assert(typeof fn === 'function');

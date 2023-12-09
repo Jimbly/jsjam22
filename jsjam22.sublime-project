@@ -9,6 +9,7 @@
                 ".gbstate",
                 "build.dev",
                 "build.prod",
+                "build.test",
                 "logs",
                 "data_store",
             ],

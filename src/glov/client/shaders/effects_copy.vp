@@ -4,11 +4,11 @@ precision highp float;
 varying vec2 interp_texcoord;
 attribute vec2 POSITION;
 
-uniform vec2 copy_uv_scale;
+uniform vec4 copy_uv_scale;
 uniform vec4 clip_space;
 
 void main()
 {
-  interp_texcoord = POSITION * copy_uv_scale;
+  interp_texcoord = POSITION * copy_uv_scale.xy + copy_uv_scale.zw;
   gl_Position = vec4(POSITION * clip_space.xy + clip_space.zw, 0, 1);
 }

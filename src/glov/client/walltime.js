@@ -1,7 +1,9 @@
 // Portions Copyright 2019 Jimb Esser (https://github.com/Jimbly/)
 // Released under MIT License: https://opensource.org/licenses/MIT
 
-const { floor, min } = Math;
+const { msToSS2020 } = require('glov/common/util');
+
+const { min } = Math;
 
 let offs = 0;
 function now() {
@@ -17,12 +19,7 @@ exports.sync = function (server_time) {
     offs = min(offs, server_time - Date.now());
   }
 };
-function toSS2020(milliseconds) {
-  // Seconds since Jan 1st, 2020
-  return floor(milliseconds / 1000) - 1577836800;
-}
-exports.toSS2020 = toSS2020;
 exports.seconds = function () {
   // Seconds since Jan 1st, 2020
-  return toSS2020(now());
+  return msToSS2020(now());
 };

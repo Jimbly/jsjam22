@@ -29,7 +29,7 @@ class DataStoreImage {
   }
 }
 
-export function create(serve_root, subdir) {
+export function dataStoreImageCreate(serve_root, subdir) {
   console.info('[DATASTORE] Local Image FileStore in use');
   return new DataStoreImage(serve_root, subdir);
 }

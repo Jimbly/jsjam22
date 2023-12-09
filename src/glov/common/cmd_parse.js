@@ -23,11 +23,26 @@ export function defaultHandler(err, resp) {
   }
 }
 
-function checkAccess(access, list) {
+function checkAccess(access, implied_access, list) {
   if (list) {
+    if (!access) {
+      return false;
+    }
     for (let ii = 0; ii < list.length; ++ii) {
-      if (!access || !access[list[ii]]) {
-        return false;
+      let role = list[ii];
+      if (!access[role]) {
+        // Check for access via implied access
+        let ok = false;
+        for (let my_role in access) {
+          let extra = implied_access[my_role];
+          if (extra && extra[role]) {
+            ok = true;
+            break;
+          }
+        }
+        if (!ok) {
+          return false;
+        }
       }
     }
   }
@@ -53,6 +68,9 @@ function CmdParse(params) {
     func: this.cmdList.bind(this),
     access_show: ['hidden'],
   });
+  this.implied_access = {
+    sysadmin: { csr: true },
+  };
 }
 CmdParse.prototype.cmdList = function (str, resp_func) {
   if (!this.cmd_list) {
@@ -90,7 +108,7 @@ CmdParse.prototype.setDefaultHandler = function (fn) {
   this.default_handler = fn;
 };
 CmdParse.prototype.checkAccess = function (access_list) {
-  return checkAccess(this.last_access, access_list);
+  return checkAccess(this.last_access, this.implied_access, access_list);
 };
 CmdParse.prototype.handle = function (self, str, resp_func) {
   resp_func = resp_func || this.default_handler;
@@ -103,7 +121,7 @@ CmdParse.prototype.handle = function (self, str, resp_func) {
   let cmd = canonical(m[1]);
   let cmd_data = this.cmds[cmd];
   this.last_access = self && self.access;
-  if (cmd_data && !checkAccess(this.last_access, cmd_data.access_run)) {
+  if (cmd_data && !this.checkAccess(cmd_data.access_run)) {
     // this.was_not_found = true;
     resp_func(`Access denied: "${m[1]}"`);
     return false;
@@ -121,16 +139,22 @@ CmdParse.prototype.handle = function (self, str, resp_func) {
 
 CmdParse.prototype.register = function (param) {
   assert.equal(typeof param, 'object');
-  let { cmd, func, help, usage, prefix_usage_with_help, access_show, access_run } = param;
-  assert(cmd && func);
+  let { cmd, func, help, usage, prefix_usage_with_help, access_show, access_run, store_data } = param;
+  assert(cmd);
+  assert(func, `Missing function for command "${cmd}"`);
   let help_lower = String(help || '').toLowerCase();
   if (help_lower.includes('(admin)')) {
     assert(access_run && access_run.includes('sysadmin'));
   }
+  if (help_lower.includes('(csr)')) {
+    assert(access_run && access_run.includes('csr'));
+  }
   if (help_lower.includes('(hidden)')) {
     assert(access_show && access_show.length);
   }
-  this.cmds[canonical(cmd)] = {
+  let canon = canonical(cmd);
+  assert(!this.cmds[canon], `Duplicate commands registered as "${canon}"`);
+  this.cmds[canon] = {
     name: cmd,
     fn: func,
     help,
@@ -138,6 +162,7 @@ CmdParse.prototype.register = function (param) {
     prefix_usage_with_help,
     access_show,
     access_run,
+    store_data, // just for resetSettings
   };
 };
 
@@ -149,18 +174,63 @@ function formatRangeValue(type, value) {
   return ret;
 }
 
+function formatEnumValue(enum_lookup, value) {
+  if (enum_lookup) {
+    for (let key in enum_lookup) {
+      if (enum_lookup[key] === value) {
+        return key;
+      }
+    }
+  }
+  return value;
+}
+
+function lookupEnumValue(enum_lookup, str) {
+  str = str.toUpperCase();
+  let v = enum_lookup[str];
+  if (typeof v === 'number') {
+    return v;
+  }
+  let n = Number(str);
+  if (Object.values(enum_lookup).includes(n)) {
+    return n;
+  }
+  for (let key in enum_lookup) {
+    if (key.startsWith(str)) {
+      return enum_lookup[key];
+    }
+  }
+  return null;
+}
+
+const BOOLEAN_LOOKUP = {
+  OFF: 0,
+  ON: 1,
+};
+
+const CMD_STORAGE_PREFIX = 'cmd_parse_';
+
 // Optional param.on_change(is_startup:boolean)
 CmdParse.prototype.registerValue = function (cmd, param) {
   assert(TYPE_NAME[param.type] || !param.set);
   assert(param.set || param.get);
   let label = param.label || cmd;
   let store = param.store && this.storage || false;
-  let store_key = `cmd_parse_${canonical(cmd)}`;
+  let enum_lookup = param.enum_lookup;
+  if (enum_lookup) {
+    assert.equal(param.type, TYPE_INT);
+  }
+  let store_key = `${CMD_STORAGE_PREFIX}${canonical(cmd)}`;
   if (param.ver) {
     store_key += `_${param.ver}`;
   }
+  let store_data;
   if (store) {
     assert(param.set);
+    store_data = {
+      store_key,
+      param,
+    };
     let init_value = this.storage.getJSON(store_key);
     if (init_value !== undefined) {
       // enforce stored values within current range
@@ -172,44 +242,51 @@ CmdParse.prototype.registerValue = function (cmd, param) {
       }
       if (init_value !== undefined) {
         param.set(init_value);
-      }
-      if (param.on_change) {
-        param.on_change(true);
+        if (param.on_change) {
+          param.on_change(true);
+        }
       }
     }
   }
+  if (!enum_lookup && param.type === TYPE_INT &&
+    param.range && param.range[0] === 0 && param.range[1] === 1
+  ) {
+    enum_lookup = BOOLEAN_LOOKUP;
+  }
+  let param_label = TYPE_NAME[param.type];
+  if (enum_lookup) {
+    param_label = Object.keys(enum_lookup).join('|');
+  }
   let fn = (str, resp_func) => {
     function value() {
-      resp_func(null, `${label} = ${param.get()}`);
+      resp_func(null, `${label} = ${formatEnumValue(enum_lookup, param.get())}`);
     }
     function usage() {
-      resp_func(`Usage: /${cmd} ${TYPE_NAME[param.type]}`);
+      resp_func(`Usage: /${cmd} ${param_label}`);
     }
     if (!str) {
       if (param.get && param.set) {
         // More explicit help for these automatic value settings
-        let is_bool = param.type === TYPE_INT && param.range && param.range[0] === 0 && param.range[1] === 1;
         let help = [
           `${label}:`,
         ];
-        if (param.range) {
+        if (param.range && !(enum_lookup && param.type === TYPE_INT)) {
           help.push(`Valid range: [${formatRangeValue(param.type, param.range[0])}...` +
             `${formatRangeValue(param.type, param.range[1])}]`);
         }
         let cur_value = param.get();
-        if (is_bool) {
-          help.push(`To disable: /${cmd} 0`);
-          help.push(`To enable: /${cmd} 1`);
-        } else {
-          help.push(`To change: /${cmd} NewValue`);
-          help.push(`  example: /${cmd} ${param.range ?
-            cur_value === param.range[0] ? param.range[1] : param.range[0] : 1}`);
+        let value_example = param.range ?
+          cur_value === param.range[0] ? param.range[1] : param.range[0] : 1;
+        if (enum_lookup) {
+          value_example = Object.keys(enum_lookup)[0];
         }
+        help.push(`To change: /${cmd} ${param_label}`);
+        help.push(`  example: /${cmd} ${value_example}`);
         let def_value = param.default_value;
         if (def_value !== undefined) {
-          help.push(`Default value = ${def_value}${is_bool ? ` (${def_value ? 'Enabled' : 'Disabled'})`: ''}`);
+          help.push(`Default value = ${formatEnumValue(enum_lookup, def_value)}`);
         }
-        help.push(`Current value = ${cur_value}${is_bool ? ` (${cur_value ? 'Enabled' : 'Disabled'})`: ''}`);
+        help.push(`Current value = ${formatEnumValue(enum_lookup, cur_value)}`);
         return resp_func(null, help.join('\n'));
       } else if (param.get) {
         return value();
@@ -221,6 +298,12 @@ CmdParse.prototype.registerValue = function (cmd, param) {
       return resp_func(`Usage: /${cmd}`);
     }
     let n = Number(str);
+    if (enum_lookup) {
+      n = lookupEnumValue(enum_lookup, str);
+      if (n === null) {
+        return usage();
+      }
+    }
     if (param.range) {
       if (n < param.range[0]) {
         n = param.range[0];
@@ -252,7 +335,7 @@ CmdParse.prototype.registerValue = function (cmd, param) {
     if (param.get) {
       return value();
     } else {
-      return resp_func(null, `${label} udpated`);
+      return resp_func(null, `${label} updated`);
     }
   };
   this.register({
@@ -262,11 +345,58 @@ CmdParse.prototype.registerValue = function (cmd, param) {
       `Set or display "${label}" value` :
       param.set ? `Set "${label}" value` : `Display "${label}" value`),
     usage: param.usage || ((param.get ? `Display "${label}" value\n  Usage: /${cmd}\n` : '') +
-      (param.set ? `Set "${label}" value\n  Usage: /${cmd} NewValue` : '')),
+      (param.set ? `Set "${label}" value\n  Usage: /${cmd} ${param_label}` : '')),
     prefix_usage_with_help: param.prefix_usage_with_help,
     access_show: param.access_show,
     access_run: param.access_run,
+    store_data,
   });
+};
+
+CmdParse.prototype.resetSettings = function () {
+  let results = [];
+  let all_saved_data = this.storage.localStorageExportAll(CMD_STORAGE_PREFIX);
+  let count = 0;
+  for (let key in all_saved_data) {
+    let value = all_saved_data[key];
+    let cmd_name = key.slice(CMD_STORAGE_PREFIX.length);
+    let version;
+    ([cmd_name, version] = cmd_name.split('_')); // grab and strip version
+    let cmd_data = this.cmds[cmd_name];
+    if (!cmd_data) {
+      this.storage.set(key, undefined);
+      results.push(`Cleared unknown setting "${cmd_name}" = ${value}`);
+      ++count;
+    } else {
+      let { name, store_data } = cmd_data;
+      let default_value = store_data?.param?.default_value;
+      if (store_data && store_data.store_key !== key) {
+        this.storage.set(key, undefined);
+        results.push(`Cleared old setting "${name} (v${version || 0})"`);
+        ++count;
+      } else if (default_value !== undefined) {
+        if (JSON.stringify(default_value) === value) {
+          // Already at default value, "clear" this silently, just remove from storage
+          this.storage.set(key, undefined);
+          // results.push(`Cleared setting "${name}" already at default value`);
+          // ++count;
+        } else {
+          this.storage.set(key, undefined);
+          results.push(`Cleared setting "${name}" = ${value} (default = ${default_value})`);
+          ++count;
+        }
+      } else {
+        this.storage.set(key, undefined);
+        results.push(`Cleared setting "${name}" = ${value}`);
+        ++count;
+      }
+    }
+  }
+
+  if (results.length) {
+    results.push(`Reset ${count} setting(s)`);
+  }
+  return results;
 };
 
 function cmpCmd(a, b) {
@@ -296,12 +426,13 @@ CmdParse.prototype.autoComplete = function (str, access) {
   let list = [];
   str = str.split(' ');
   let first_tok = canonical(str[0]);
+  this.last_access = access;
   for (let cname in this.cmds_for_complete) {
     if (str.length === 1 && cname.slice(0, first_tok.length) === first_tok ||
       str.length > 1 && cname === first_tok
     ) {
       let cmd_data = this.cmds_for_complete[cname];
-      if (checkAccess(access, cmd_data.access_show) && checkAccess(access, cmd_data.access_run)) {
+      if (this.checkAccess(cmd_data.access_show) && this.checkAccess(cmd_data.access_run)) {
         list.push({
           cname,
           cmd: cmd_data.name,

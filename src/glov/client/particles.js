@@ -66,7 +66,7 @@ const {
   vec3, vec4, v3add, v4copy, v4lerp, v4mul,
 } = require('glov/common/vmath.js');
 const sprites = require('./sprites.js');
-const textures = require('./textures.js');
+const { textureLoad } = require('./textures.js');
 
 const blend_map = {
   alpha: sprites.BLEND_ALPHA,
@@ -79,7 +79,7 @@ export function preloadParticleData(particle_data) {
     let def = particle_data.defs[key];
     for (let part_name in def.particles) {
       let part_def = def.particles[part_name];
-      textures.load({ url: `img/${part_def.texture}.png` });
+      textureLoad({ url: `img/${part_def.texture}.png` });
     }
   }
 }
@@ -112,7 +112,7 @@ function normalizeParticle(def, particle_manager) {
   if (!def.normalized) {
     let norm = def.normalized = {
       blend: blend_map[def.blend] || sprites.BLEND_ALPHA,
-      texture: textures.load({ url: def.texture ? `img/${def.texture}.png` : 'img/glov/util_circle.png' }),
+      texture: textureLoad({ url: def.texture ? `img/${def.texture}.png` : 'img/glov/util_circle.png' }),
       color: normalizeValueVec(def.color || [1,1,1,1], 4),
       color_track: null,
       size: normalizeValueVec(def.size || [1,1], 2),

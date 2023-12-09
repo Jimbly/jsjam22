@@ -26,6 +26,8 @@
     // "paths": {
     //   "glov": ["./glov"],
     // },
+    // Switch to the ECMA runtime behavior of class fields (coupled with allowDeclareFields in @babel/preset-typescript
+    "useDefineForClassFields": true,
   },
   "include": ["**/*.ts"]
 }

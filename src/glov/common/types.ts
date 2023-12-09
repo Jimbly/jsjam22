@@ -1,11 +1,19 @@
 import type { FriendData } from './friends_data';
-import type { Vec4 } from './vmath';
+import type { Packet } from './packet';
+
+export type VoidFunc = () => void;
+
+export type TSMap<T> = Partial<Record<string, T>>;
 
 /**
  * Data object type to be used when handling an object that contains some type of (possible unknown) information.
  * @template T - The type of information held by the object, defaults to unknown.
  */
-export type DataObject = Partial<Record<string, unknown>>;
+export type DataObject = TSMap<unknown>;
+
+export function isDataObject(value: unknown): value is DataObject {
+  return value ? typeof value === 'object' && !Array.isArray(value) : false;
+}
 
 /**
  * Error callback accepting an error as the first parameter and a result as the second parameter.
@@ -21,49 +29,109 @@ export type ErrorCallback<T = never, E = unknown> = (
   result?: T extends (never | void) ? never : (T | undefined | null)
 ) => void;
 
+/**
+ * Error callback accepting an (string) error as the first parameter and a result as the second parameter.
+ * Will only be called as cb(string) or cb(null, result)
+ *
+ * @template T - The result type, defaults to never (no result)
+ * @param err - The error parameter
+ * @param result - The result parameter
+ */
+export type NetErrorCallback<T = never> = (
+  err: string | null,
+  result?: T
+) => void;
+
+type NetResponseCallbackFn<T = never, E = unknown> = (
+  err?: E | undefined | null,
+  result?: T extends (never | void) ? never : (T | undefined | null),
+  resp_func?: NetErrorCallback
+) => void;
+/**
+ * Callback function type passed to any network message handlers: can use it to
+ * send back a packet, an error, a result, as well as register a function to be
+ * called in response to your response.
+ */
+export interface NetResponseCallback<T = never> extends NetResponseCallbackFn<T, string> {
+  pak: () => Packet;
+}
+
+/**
+ * Helper type to make a new type that has specific members marked as required.
+ * Example: WithRequired<CmdDef, 'cmd' | 'help'>
+ */
+export type WithRequired<T, K extends keyof T> = T & { [P in K]-?: T[P] };
+
+/**
+ * Helper type to get the type of the value of entries in a Partial<Record<>>/dictionary,
+ * excluding the value of `undefined` from the Partial<>
+ */
+export type DefinedValueOf<T> = Exclude<T[keyof T], undefined>;
+
+/**
+ * Helper type to mark only one field of a type as optional.
+ */
+export type Optional<T, K extends keyof T> = Pick<Partial<T>, K> & Omit<T, K>;
+
 
 // TODO: Implement the types below and move them to the appropriate files
 
 /**
- * Client presence data
+ * CmdParse data
  */
-export interface ClientPresenceData {
-  active: number;
-  state: string;
-  payload: unknown;
+export type CmdRespFunc = ErrorCallback<string | unknown, string | null>;
+export interface CmdDef {
+  cmd?: string;
+  help?: string;
+  usage?: string;
+  prefix_usage_with_help?: boolean;
+  access_show?: string[];
+  access_run?: string[];
+  func(str: string, resp_func: CmdRespFunc): void;
 }
+
 /**
- * Server presence data
+ * Presence data
  */
-export interface ServerPresenceData {
-  id: number;
+export type PresenceEntry<T=unknown> = {
   active: number;
   state: string;
-  payload: unknown;
-}
+  id: number; // note: not sent from client -> server
+  payload?: T;
+};
+
+export type EntityID = number;
 
 /*
  * Chat message data
  */
-export interface ChatMessageData {
-  id: string | undefined;
+export interface ChatMessageDataShared {
+  id?: string; // user_id or client_id (or undefined if not from a user)
   msg: string;
-  flags: number;
+  flags?: number;
+  display_name?: string;
+  style?: string; // If added by the worker
+}
+export interface ChatMessageDataSaved extends ChatMessageDataShared {
   ts: number;
-  display_name: string | undefined;
+}
+export interface ChatMessageDataBroadcast extends ChatMessageDataShared {
+  client_id?: string;
+  ent_id?: EntityID; // If from a worker with an EnityManager
+  quiet?: boolean; // Added at run-time on client
 }
 /*
  * Chat history data
  */
 export interface ChatHistoryData {
   idx: number;
-  msgs: ChatMessageData[];
+  msgs: ChatMessageDataSaved[];
 }
 
 /*
  * Friends command response
  */
-export type FriendCmdResponse = { msg: string, friend: FriendData };
+export type FriendCmdResponse = { msg: string; friend: FriendData };
 
 /**
  * Server worker handler callback
@@ -74,97 +142,72 @@ export type HandlerCallback<T = never> = ErrorCallback<T, string>;
  * Server worker handler source
  */
 export interface HandlerSource {
-  channel_id: string,
-  id: string,
-  type: string,
+  channel_id: string;
+  id: string;
+  type: string;
+  direct?: true;
 }
 
 /**
  * Server client worker handler source
  */
 export interface ClientHandlerSource extends HandlerSource {
-  type: 'client',
-  user_id?: string,
-  display_name?: string,
-  access?: true,
-  direct?: true,
-  sysadmin?: true,
+  type: 'client';
+  user_id?: string;
+  display_name?: string;
+  access?: true;
+  direct?: true;
+  sysadmin?: true;
+  csr?: true;
+  elevated?: number;
 }
 export function isClientHandlerSource(src: HandlerSource): src is ClientHandlerSource {
   return src.type === 'client';
 }
+export type LoggedInClientHandlerSource = WithRequired<ClientHandlerSource, 'user_id' | 'display_name'>;
 
-export interface Packet {
-  readU8: () => number,
-  writeU8: (value: number) => void,
-  readU32: () => number,
-  writeU32: (value: number) => void,
-  readInt: () => number,
-  writeInt: (value: number) => void,
-  readFloat: () => number,
-  writeFloat: (value: number) => void,
-  readString: () => string,
-  writeString: (value: string) => void,
-  readAnsiString: () => string,
-  writeAnsiString: (value: string) => void,
-  readJSON: () => unknown,
-  writeJSON: (value: unknown) => void,
-  readBool: () => boolean,
-  writeBool: (value: boolean) => void,
-  readBuffer: (do_copy: boolean) => Uint8Array,
-  writeBuffer: (value: Uint8Array) => void,
+export interface ChatIDs extends ClientHandlerSource {
+  style?: string;
+}
 
-  append: (other: Packet) => void,
-  appendRemaining: (other: Packet) => void,
-  send: (resp_func?: ErrorCallback) => void,
-  ended: () => boolean,
-  updateFlags: (flags: number) => void,
-  readFlags: () => void,
-  writeFlags: () => void,
-  getFlags: () => number,
-  getBuffer: () => Uint8Array,
-  getBufferLen: () => number,
-  getInternalFlags: () => number,
-  getOffset: () => number,
-  getRefCount: () => number,
-  makeReadable: () => void,
-  pool: () => void,
-  ref: () => void,
-  seek: (offs: number) => void,
-  totalSize: () => number,
+export type ClientIDs = {
+  client_id: string;
+  user_id?: string;
+  display_name?: string;
+  roles?: TSMap<1>;
+};
+
+export interface ClientChannelWorker {
+  on(key: string, cb: (data: DataObject, key: string, value: DataObject) => void): void;
+  removeListener(key: string, cb: (data: DataObject, key: string, value: DataObject) => void): void;
+  onSubscribe(cb: (data: unknown) => void): void;
+  onceSubscribe(cb: ((data: DataObject) => void) | VoidFunc): void;
+  numSubscriptions(): number;
+  isFullySubscribed(): boolean;
+  unsubscribe(): void;
+  getChannelData<T>(key: string, default_value: T): T;
+  getChannelData(key: string): unknown;
+  getChannelID(): string;
+  setChannelData(key: string, value: unknown, skip_predict?: boolean, resp_func?: NetErrorCallback): void;
+  pak(msg: string): Packet;
+  send<R=never, P=null>(msg: string, data: P, resp_func: NetErrorCallback<R>): void;
+  send(msg: string, data?: unknown, resp_func?: NetErrorCallback): void;
+  cmdParse(cmd: string, resp_func: CmdRespFunc): void;
+  readonly data: {
+    public?: unknown;
+  };
+}
+
+export interface UserChannel extends ClientChannelWorker {
+  presence_data: TSMap<PresenceEntry>;
 }
 
 // TODO: Delete this type and all usages of it.
 // It is being used as a placeholder for data types that are not yet implemented.
 export type UnimplementedData = DataObject;
 
-/**
- * Client Sprite class
- */
-export interface Sprite {
-  uidata: {
-    total_w: number,
-    total_h: number,
-  },
-  uvs: number[],
-  draw: (params: {
-    x: number, y: number, z: number,
-    w: number, h: number,
-    uvs?: number[], color: Vec4,
-  }) => void,
-}
-/**
- * Client Sprite creation parameters
- */
-export type SpriteParam = UnimplementedData;
-/**
- * UI Sprites object
- */
-export interface UISprites {
-  chat_panel: Sprite,
-  scrollbar_top: Sprite,
-  scrollbar_bottom: Sprite,
-  scrollbar_trough: Sprite,
-  scrollbar_handle: Sprite,
-  scrollbar_handle_grabber: Sprite,
-}
+export type DeepPartial<T> = T extends DataObject ? {
+    [P in keyof T]?: DeepPartial<T[P]>;
+} : T;
+
+export type NumberBoolean = 0 | 1;

@@ -2,76 +2,12 @@
 const local_storage = require('glov/client/local_storage.js');
 local_storage.setStoragePrefix('jsjam22'); // Before requiring anything else that might load from this
 
-const assert = require('assert');
-const camera2d = require('glov/client/camera2d.js');
-const engine = require('glov/client/engine.js');
-const { ALIGN, style, styleAlpha, styleColored } = require('glov/client/font.js');
-const input = require('glov/client/input.js');
-const { KEYS } = input;
-const { abs, floor, max, min, sin, random, round, PI } = Math;
-const net = require('glov/client/net.js');
-const particle_data = require('./particle_data.js');
-const { preloadParticleData } = require('glov/client/particles.js');
-const pico8 = require('glov/client/pico8.js');
-const { mashString, randCreate } = require('glov/common/rand_alea.js');
-const score_system = require('glov/client/score.js');
-const { drawCellDefault, scoresDraw } = require('glov/client/score_ui.js');
-const { scrollAreaCreate } = require('glov/client/scroll_area.js');
-const settings = require('glov/client/settings.js');
-const { soundPlayMusic } = require('glov/client/sound.js');
-const { createSprite } = require('glov/client/sprites.js');
-const { createSpriteAnimation } = require('glov/client/sprite_animation.js');
-const transition = require('glov/client/transition.js');
-const { createTransitioner } = require('./transitioner.js');
-const ui = require('glov/client/ui.js');
-const { uiGetDOMElem } = ui;
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const { clamp, clone, lerp, easeInOut, easeIn, easeOut, ridx } = require('glov/common/util.js');
-const { vec2, vec4, v4copy, v4set } = require('glov/common/vmath.js');
-
-window.Z = window.Z || {};
-Z.BACKGROUND = 1;
-Z.BOARD = 10;
-Z.WORKERS = 20;
-Z.HELP = 40;
-Z.UI = 100;
-Z.PARTICLES = 150;
-Z.FLOATERS = 200;
-
 // Virtual viewport for our game logic
-const game_width = 640 - 12;
-const game_height = 384;
-let font;
-let title_font;
-
-let auto_load = true;
-const SPEED_PAUSE = 0;
-const SPEED_PLAY = 1;
-const SPEED_FF = 5;
-let speed = SPEED_PLAY;
-
-const allow_pause = engine.defines.PAUSE;
-
-let sprites = {};
-let particles;
-
-const DEBUGUI = engine.DEBUG && false;
-
-const TILE_SIZE = 16;
-const CARRY_OFFSET_SOURCE_SINK = 1;
-const CARRY_OFFSET_WORKER = 8;
-
-const INITIAL_GAME_SEED = 'test5';
-
-const TICK_TIME = 1000;
-
-const TYPE_EMPTY = 0;
-const TYPE_DETAIL = 1;
-const TYPE_SOURCE = 2;
-const TYPE_SINK = 3;
-const TYPE_ROAD = 4;
-const TYPE_CRAFT = 5;
-const TYPE_DEBUG_WORKER = 6;
+export const game_width = 640 - 12;
+export const game_height = 384;
+export const MENU_BUTTON_W = 96;
+export const MENU_BUTTON_H = 22;
+export const TILE_SIZE = 16;
 
 const RESOURCE_WOOD = 1;
 // const RESOURCE_BERRY = 99;
@@ -85,7 +21,7 @@ const RESOURCE_GOLDPAINT = 8;
 const RESOURCE_GEARS = 9;
 const RESOURCE_COW = 10;
 const RESOURCE_GOLDENCOW = 100;
-const RESOURCE_FRAMES = {
+export const RESOURCE_FRAMES = {
   [RESOURCE_WOOD]: 9,
   // [RESOURCE_BERRY]: 11,
   [RESOURCE_GOLD]: 12,
@@ -99,6 +35,79 @@ const RESOURCE_FRAMES = {
   [RESOURCE_GOLDENCOW]: 29,
   [RESOURCE_GOLDPAINT]: 30,
 };
+
+export const TICK_TIME = 1000;
+
+const assert = require('assert');
+const camera2d = require('glov/client/camera2d.js');
+const engine = require('glov/client/engine.js');
+const { style, styleAlpha } = require('glov/client/font.js');
+const input = require('glov/client/input.js');
+const { KEYS } = input;
+const { abs, floor, max, min, sin, random, round, PI } = Math;
+const net = require('glov/client/net.js');
+const particle_data = require('./particle_data.js');
+const { preloadParticleData } = require('glov/client/particles.js');
+const pico8 = require('glov/client/pico8.js');
+const { mashString, randCreate } = require('glov/common/rand_alea.js');
+const { scrollAreaCreate } = require('glov/client/scroll_area.js');
+const settings = require('glov/client/settings.js');
+const { soundPlayMusic } = require('glov/client/sound.js');
+const { createSprite } = require('glov/client/sprites.js');
+const { spriteSetGet } = require('glov/client/sprite_sets.js');
+const { createSpriteAnimation } = require('glov/client/sprite_animation.js');
+const transition = require('glov/client/transition.js');
+const { createTransitioner } = require('./transitioner.js');
+const ui = require('glov/client/ui.js');
+// const { uiGetDOMElem } = ui;
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const { clamp, clone, lerp, easeInOut, easeIn, easeOut, ridx } = require('glov/common/util.js');
+const { vec2, vec4, v4copy, v4set } = require('glov/common/vmath.js');
+const {
+  main2init,
+  setScore,
+  stateHighScoresInternal,
+  timeFormat,
+  updateHighScores,
+} = require('./main2');
+
+window.Z = window.Z || {};
+Z.BACKGROUND = 1;
+Z.BOARD = 10;
+Z.WORKERS = 20;
+Z.HELP = 40;
+Z.UI = 100;
+Z.PARTICLES = 150;
+Z.FLOATERS = 200;
+
+let font;
+let title_font;
+
+let auto_load = true;
+const SPEED_PAUSE = 0;
+const SPEED_PLAY = 1;
+const SPEED_FF = 5;
+let speed = SPEED_PLAY;
+
+const allow_pause = engine.defines.PAUSE;
+
+export let sprites = {};
+let particles;
+
+const DEBUGUI = engine.DEBUG && false;
+
+const CARRY_OFFSET_SOURCE_SINK = 1;
+const CARRY_OFFSET_WORKER = 8;
+
+const INITIAL_GAME_SEED = 'test5';
+
+const TYPE_EMPTY = 0;
+const TYPE_DETAIL = 1;
+const TYPE_SOURCE = 2;
+const TYPE_SINK = 3;
+const TYPE_ROAD = 4;
+const TYPE_CRAFT = 5;
+const TYPE_DEBUG_WORKER = 6;
 
 const ANIMDATA_DETAIL = [
   {
@@ -616,25 +625,6 @@ function gameStateAddProgress(state) {
   }
 }
 
-function encodeScore(score) {
-  let ticks = max(999999 - score.ticks, 0);
-  return (score.tech || 0) * 1000000 + ticks;
-}
-
-function parseScore(value) {
-  let tech = floor(value / 1000000);
-  value -= tech * 1000000;
-  let ticks = 999999 - value;
-  return {
-    ticks,
-    tech,
-  };
-}
-
-let level_list = [{
-  name: 'the',
-}];
-
 let crazysdk;
 function crazy() {
   if (!crazysdk && window.CrazyGames) {
@@ -691,8 +681,7 @@ function init() {
 
   preloadParticleData(particle_data);
 
-  score_system.init(encodeScore, parseScore, level_list, 'JS22');
-  score_system.updateHighScores();
+  main2init();
 
   game_state = gameStateCreate(INITIAL_GAME_SEED);
 }
@@ -1046,7 +1035,7 @@ function youWin() {
     },
   });
   high_score_from_victory = true;
-  // eslint-disable-next-line no-use-before-define
+  // eslint-disable-next-line @typescript-eslint/no-use-before-define
   engine.setState(stateHighScores);
 }
 
@@ -1062,9 +1051,7 @@ function outputResource(resource, x0, y0, offs) {
   if (!game_state.ever_output[resource]) {
     game_state.ever_output[resource] = true;
     gameStateAddProgress(game_state);
-    score_system.setScore(0,
-      { ticks: game_state.num_ticks, tech: resource }
-    );
+    setScore({ ticks: game_state.num_ticks, tech: resource });
     if (resource === RESOURCE_GOLDENCOW) {
       youWin();
     }
@@ -1389,17 +1376,6 @@ function clearCell(x, y, just_sell) {
   cell.type = TYPE_EMPTY;
 }
 
-function pad2(v) {
-  return `0${v}`.slice(-2);
-}
-function timeFormat(ticks) {
-  let ms = ticks * TICK_TIME;
-  let s = floor(ms/1000);
-  let m = floor(s/60);
-  s %= 60;
-  return `${m}:${pad2(s)}`;
-}
-
 const style_help = style(null, {
   color: pico8.font_colors[0],
 });
@@ -1624,7 +1600,7 @@ function drawBoard(x0, y0, w, h) {
     no_bg: true,
   })) {
     saveGame();
-    // eslint-disable-next-line no-use-before-define
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define
     engine.setState(stateMenu);
     transition.queue(Z.TRANSITION_FINAL, transition.pixelate(500));
   }
@@ -2113,67 +2089,13 @@ let transitioner = createTransitioner({
   interactable_at: 100,
 });
 
-let banner_ad;
+// let banner_ad;
 
-const MENU_BUTTON_W = 96;
-const MENU_BUTTON_H = 22;
-function drawCellTech(param) {
-  let { value, x, y, z, w, h } = param;
-  if (typeof value === 'number') {
-    sprites.tiles.draw({
-      x: x + floor((w - TILE_SIZE)/2), y: y + floor((h - TILE_SIZE)/2), z,
-      frame: RESOURCE_FRAMES[value],
-    });
-  } else {
-    drawCellDefault(param);
-  }
-}
-const SCORE_COLUMNS = [
-  // widths are just proportional, scaled relative to `width` passed in
-  { name: '', width: 12, align: ALIGN.HFIT | ALIGN.HRIGHT | ALIGN.VCENTER },
-  { name: 'Name', width: 60, align: ALIGN.HFIT | ALIGN.VCENTER },
-  { name: 'Tech', width: 24, draw: drawCellTech },
-  { name: 'Time', width: 24 },
-];
-const style_score = styleColored(null, pico8.font_colors[1]);
-const style_me = styleColored(null, pico8.font_colors[8]);
-const style_header = styleColored(null, pico8.font_colors[5]);
-function myScoreToRow(row, score) {
-  row.push(score.tech, timeFormat(score.ticks));
-}
 function stateHighScores() {
   v4copy(engine.border_clear_color, pico8.colors[11]);
   gl.clearColor(...pico8.colors[11]);
 
-  let width = 280;
-  let x = (game_width - width) / 2;
-  let y = 0;
-  let z = Z.UI + 10;
-  let size = 8;
-  let pad = size;
-  let level_id = 'the';
-
-  title_font.drawSizedAligned(styleColored(null, pico8.font_colors[0]),
-    x, y, z, size * 2, font.ALIGN.HCENTERFIT, width, 0, 'HIGH SCORES');
-  y += size * 2 + 2;
-  ui.drawLine(x + 130, y, x+width - 130, y, z, 1, 1, pico8.colors[5]);
-  y += 4;
-
-  const scores_list_max_y = game_height - (MENU_BUTTON_H + pad);
-  const height = scores_list_max_y - y;
-  y = scoresDraw({
-    size, line_height: TILE_SIZE + 1,
-    x, y, z,
-    width, height,
-    level_id,
-    columns: SCORE_COLUMNS,
-    scoreToRow: myScoreToRow,
-    style_score,
-    style_me,
-    style_header,
-    color_line: pico8.colors[0],
-    color_me_background: pico8.colors[1],
-  });
+  stateHighScoresInternal();
 
   // ui.panel({
   //   x: x - pad,
@@ -2185,23 +2107,24 @@ function stateHighScores() {
   // });
   // ui.menuUp();
 
-  if (crazy()) {
-    let elem = uiGetDOMElem(banner_ad);
-    if (elem && elem !== banner_ad) {
-      // init
-      banner_ad = elem;
-      elem.style.top = '2%';
-      elem.style.height = '96%';
-      elem.style.right = '1%';
-      elem.id = 'banner-hs-right';
-      crazy().requestResponsiveBanner([elem.id]);
-    }
-    if (elem) {
-      let banner_x = x + width + pad;
-      let pos = camera2d.htmlPos(banner_x, 0);
-      elem.style.left = `${pos[0]}%`;
-    }
-  }
+  // Not on this platform anymore:
+  // if (crazy()) {
+  //   let elem = uiGetDOMElem(banner_ad);
+  //   if (elem && elem !== banner_ad) {
+  //     // init
+  //     banner_ad = elem;
+  //     elem.style.top = '2%';
+  //     elem.style.height = '96%';
+  //     elem.style.right = '1%';
+  //     elem.id = 'banner-hs-right';
+  //     crazy().requestResponsiveBanner([elem.id]);
+  //   }
+  //   if (elem) {
+  //     let banner_x = x + width + pad;
+  //     let pos = camera2d.htmlPos(banner_x, 0);
+  //     elem.style.left = `${pos[0]}%`;
+  //   }
+  // }
 
   let button_x = (game_width - MENU_BUTTON_W) / 2;
   if (high_score_from_victory) {
@@ -2213,7 +2136,7 @@ function stateHighScores() {
       text: 'Continue Playing',
     })) {
       transition.queue(Z.TRANSITION_FINAL, transition.pixelate(500));
-      // eslint-disable-next-line no-use-before-define
+      // eslint-disable-next-line @typescript-eslint/no-use-before-define
       engine.setState(statePlay);
     }
     button_x += MENU_BUTTON_W + 4;
@@ -2226,7 +2149,7 @@ function stateHighScores() {
     text: 'Main Menu',
   })) {
     transition.queue(Z.TRANSITION_FINAL, transition.fade(500));
-    // eslint-disable-next-line no-use-before-define
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define
     engine.setState(stateMenu);
   }
 }
@@ -2321,7 +2244,7 @@ function stateMenu() {
     color,
     text: 'High Scores',
   })) {
-    score_system.updateHighScores();
+    updateHighScores();
     high_score_from_victory = false;
     engine.setState(stateHighScores);
     transition.queue(Z.TRANSITION_FINAL, transition.fade(500));
@@ -2333,25 +2256,25 @@ function stateMenu() {
   y = game_height - pad - button_h;
   if (ui.button({
     img: sprites.tiles_ui,
-    frame: settings.get('sound') ? 6 : 7,
+    frame: settings.get('volume_sound') ? 6 : 7,
     x, y,
     w: button_h, h: button_h,
     color,
     no_bg: true,
   })) {
-    settings.set('sound', 1 - settings.get('sound'));
+    settings.set('volume_sound', 1 - settings.get('volume_sound'));
   }
   x += button_h + pad;
   if (ui.button({
     img: sprites.tiles_ui,
-    frame: settings.get('music') ? 14 : 15,
+    frame: settings.get('volume_music') ? 14 : 15,
     x, y,
     w: button_h, h: button_h,
     color,
     no_bg: true,
   })) {
-    settings.set('music', 1 - settings.get('music'));
-    if (settings.get('music')) {
+    settings.set('volume_music', 1 - settings.get('volume_music'));
+    if (settings.get('volume_music')) {
       soundPlayMusic('bg');
     }
   }
@@ -2390,10 +2313,14 @@ export function main() {
     do_borders: true,
     show_fps: false,
     ui_sprites: {
+      ...spriteSetGet('pixely'),
       button: { name: 'button', ws: [4,14,4], hs: [22] },
       button_down: { name: 'button_down', ws: [4,14,4], hs: [22] },
       button_disabled: { name: 'button_disabled', ws: [4,14,4], hs: [22] },
       panel: { name: 'panel', ws: [3, 2, 3], hs: [3, 10, 3] },
+      collapsagories: null,
+      collapsagories_rollover: null,
+      collapsagories_shadow_down: null,
     },
     ui_sounds: {
       // user actions

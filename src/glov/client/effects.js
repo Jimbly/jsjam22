@@ -9,10 +9,15 @@ const engine = require('./engine.js');
 const { renderWidth, renderHeight } = engine;
 const { framebufferEnd, framebufferStart, framebufferTopOfFrame } = require('./framebuffer.js');
 const geom = require('./geom.js');
-const shaders = require('./shaders.js');
-const sprites = require('./sprites.js');
-const textures = require('./textures.js');
-const { vec2, vec3, vec4, v4set } = require('glov/common/vmath.js');
+const {
+  SEMANTIC,
+  shaderCreate,
+  shadersBind,
+  shadersPrelink,
+} = require('./shaders.js');
+const { spriteQueueFn } = require('./sprites.js');
+const { textureBindArray, textureWhite } = require('./textures.js');
+const { vec3, vec4, v4set } = require('glov/common/vmath.js');
 
 const shader_data = {
   vp_copy: {
@@ -49,9 +54,9 @@ function getShader(key) {
   let elem = shader_data[key];
   if (!elem.shader) {
     if (elem.fp) {
-      elem.shader = shaders.create(elem.fp);
+      elem.shader = shaderCreate(elem.fp);
     } else {
-      elem.shader = shaders.create(elem.vp);
+      elem.shader = shaderCreate(elem.vp);
     }
   }
   return elem.shader;
@@ -60,7 +65,7 @@ function getShader(key) {
 
 let inited = false;
 let clip_space = vec4(2, 2, -1, -1);
-let copy_uv_scale = vec2(1, 1);
+let copy_uv_scale = vec4(1, 1, 0, 0);
 let shader_params_default = {
   clip_space,
   copy_uv_scale,
@@ -76,7 +81,7 @@ function startup() {
   inited = true;
 
   quad_geom = geom.create(
-    [[shaders.semantic.POSITION, gl.FLOAT, 2, false]],
+    [[SEMANTIC.POSITION, gl.FLOAT, 2, false]],
     new Float32Array([
       0, 0,
       1, 0,
@@ -145,7 +150,7 @@ function doEffect(fn) {
 
 export function effectsQueue(z, fn) {
   effectsPassAdd();
-  sprites.queuefn(z, doEffect.bind(null, fn));
+  spriteQueueFn(z, doEffect.bind(null, fn));
 }
 
 export function effectsTopOfFrame() {
@@ -318,6 +323,7 @@ function applyEffect(effect, view_w, view_h) {
       clear_color: effect.clear_color,
       viewport,
       final,
+      need_depth: effect.need_depth_begin,
     });
   } else {
     clip_space[0] = 2.0;
@@ -328,6 +334,7 @@ function applyEffect(effect, view_w, view_h) {
     framebufferStart({
       width: view_w, height: view_h,
       final,
+      need_depth: effect.need_depth_begin,
     });
   }
   // clip_space[2] = -1.0;
@@ -335,8 +342,8 @@ function applyEffect(effect, view_w, view_h) {
   // copy_uv_scale[0] = target_w / effect.coord_source.width;
   // copy_uv_scale[1] = target_h / effect.coord_source.height;
 
-  shaders.bind(getShader('vp_copy'), getShader(effect.shader), effect.params);
-  textures.bindArray(effect.texs);
+  shadersBind(getShader('vp_copy'), getShader(effect.shader), effect.params);
+  textureBindArray(effect.texs);
   quad_geom.draw();
 }
 
@@ -412,7 +419,10 @@ export function applyCopy(params) {
     source = framebufferEnd({ filter_linear: params.filter_linear, need_depth: params.need_depth });
   }
   params.shader = params.shader || 'copy';
-  params.params = shader_params_default;
+  params.params = params.params ? {
+    ...shader_params_default,
+    ...params.params,
+  } : shader_params_default;
   if (Array.isArray(source)) {
     params.texs = source;
   } else {
@@ -639,7 +649,7 @@ export function clearAlpha() {
     gl.disable(gl.DEPTH_TEST);
   }
   gl.colorMask(false, false, false, true);
-  applyCopy({ source: textures.textures.white, no_framebuffer: true });
+  applyCopy({ source: textureWhite(), no_framebuffer: true });
   gl.colorMask(true, true, true, true);
   if (old_dt) {
     gl.enable(gl.DEPTH_TEST);
@@ -648,6 +658,6 @@ export function clearAlpha() {
 
 export function effectsStartup(prelink_effects) {
   prelink_effects.forEach((name) => {
-    shaders.prelink(getShader('vp_copy'), getShader(name));
+    shadersPrelink(getShader('vp_copy'), getShader(name));
   });
 }

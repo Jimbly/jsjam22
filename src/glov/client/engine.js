@@ -12,25 +12,27 @@ let startup_funcs = [];
 
 exports.require = require; // For browser console debugging
 
-require('not_worker'); // This module cannot be required from a worker bundle
-
 const assert = require('assert');
 const { is_ios_safari } = require('./browser.js');
 const { buildUIStartup } = require('./build_ui.js');
 const camera2d = require('./camera2d.js');
 const cmds = require('./cmds.js');
+const { dataErrorQueueEnable } = require('glov/common/data_error.js');
 const effects = require('./effects.js');
 const { effectsReset, effectsTopOfFrame, effectsIsFinal, effectsPassAdd, effectsPassConsume } = effects;
 const {
   errorReportDisable,
   errorReportSetTimeAccum,
   errorReportSetDetails,
-  glovErrorReport,
+  glovErrorReportDisableSubmit,
+  glovErrorReportSetCrashCB,
 } = require('./error_report.js');
 const glov_font = require('./font.js');
+const { fontTick } = glov_font;
 const { framebufferStart, framebufferEndOfFrame } = require('./framebuffer.js');
-const geom = require('./geom.js');
+const { geomResetState, geomStartup } = require('./geom.js');
 const input = require('./input.js');
+const { inputAllowAllEvents } = require('./input.js');
 const local_storage = require('./local_storage.js');
 const mat3FromMat4 = require('gl-mat3/fromMat4');
 const mat4Copy = require('gl-mat4/copy');
@@ -39,28 +41,59 @@ const mat4Mul = require('gl-mat4/multiply');
 const mat4Transpose = require('gl-mat4/transpose');
 const mat4Perspective = require('gl-mat4/perspective');
 const { asin, cos, floor, min, max, PI, round, sin, sqrt } = Math;
-const models = require('./models.js');
+const { modelLoadCount, modelStartup } = require('./models.js');
 const perf = require('./perf.js');
-const { profilerFrameStart } = require('./profiler.js');
+const { profilerFrameStart, profilerGarbageEstimate } = require('./profiler.js');
 const { profilerUIStartup } = require('./profiler_ui.js');
 const { perfCounterTick } = require('glov/common/perfcounters.js');
 const settings = require('./settings.js');
 const shaders = require('./shaders.js');
+const {
+  shadersAddGlobal,
+  shadersHandleDefinesChanged,
+  shadersStartup,
+  shadersResetState,
+} = require('./shaders.js');
 const { shaderDebugUIStartup } = require('./shader_debug_ui.js');
-const { soundLoading, soundStartup, soundTick, soundPause, soundResume } = require('./sound.js');
+const { soundLoading, soundStartup, soundTick } = require('./sound.js');
 const { spotEndInput } = require('./spot.js');
-const sprites = require('./sprites.js');
-const { blendModeReset } = sprites;
-const textures = require('./textures.js');
-const { texturesTick } = textures;
+const {
+  blendModeReset,
+  spriteDraw,
+  spriteDrawReset,
+  spriteStartup,
+} = require('./sprites.js');
+const {
+  textureBind,
+  textureDefaultFilters,
+  textureError,
+  textureLoadCount,
+  textureResetState,
+  textureStartup,
+  textureTick,
+} = require('./textures.js');
 const glov_transition = require('./transition.js');
-const glov_ui = require('./ui.js');
+const {
+  drawRect,
+  internal: {
+    cleanupDOMElems,
+    uiEndFrame,
+    uiSetFonts,
+    uiStartup,
+    uiTick,
+  },
+  uiBindSounds,
+} = require('./ui.js');
 const urlhash = require('./urlhash.js');
-const { callEach, clamp, defaults, nearSame, ridx } = require('glov/common/util.js');
+const { callEach, clamp, nearSame, ridx } = require('glov/common/util.js');
+const verify = require('glov/common/verify.js');
 const {
   mat3, mat4,
+  mat4isFinite,
   vec3, vec4, v3mulMat4, v3iNormalize, v4copy, v4same, v4set,
 } = require('glov/common/vmath.js');
+const { webFSStartup } = require('./webfs.js');
+const { profanityStartupLate } = require('./words/profanity.js');
 
 export let canvas;
 export let webgl2;
@@ -82,8 +115,10 @@ let game_aspect;
 export let render_width;
 export let render_height;
 
-//eslint-disable-next-line no-use-before-define
+//eslint-disable-next-line @typescript-eslint/no-use-before-define
 export let defines = urlhash.register({ key: 'D', type: urlhash.TYPE_SET, change: definesChanged });
+
+urlhash.register({ key: 'nocoop' }); // needed if server is using request_utils:setupRequestHeaders
 
 export let ZFAR;
 export let ZNEAR;
@@ -111,11 +146,19 @@ export const border_color = vec4(0, 0, 0, 1);
 export let border_clear_color = vec4(0, 0, 0, 1);
 
 let no_render = false;
+let dirty_render = false;
+let render_frames_needed = 3;
+
+export function renderNeeded(frames) {
+  // default 3 frames - 1 gets eaten immediately, one to show the result of the input, one to get back to steady state
+  render_frames_needed = max(render_frames_needed, frames || 3);
+}
 
 export function disableRender(new_value) {
   no_render = new_value;
+  inputAllowAllEvents(no_render);
   if (no_render) {
-    glov_ui.cleanupDOMElems();
+    cleanupDOMElems();
   }
 }
 
@@ -127,7 +170,7 @@ export function addViewSpaceGlobal(name) {
   assert.equal(ws_vec.length, 3);
   let vs_name = `${name}_vs`;
   let vs_vec = vec3();
-  shaders.addGlobal(vs_name, vs_vec);
+  shadersAddGlobal(vs_name, vs_vec);
   view_space_globals.push({
     vs: vs_vec,
     ws: ws_vec,
@@ -136,6 +179,7 @@ export function addViewSpaceGlobal(name) {
 
 let mat_temp = mat4();
 export function setGlobalMatrices(_mat_view) {
+  assert(mat4isFinite(_mat_view));
   mat4Copy(mat_view, _mat_view);
   mat4Mul(mat_vp, mat_projection, mat_view);
   v3iNormalize(light_dir_ws);
@@ -149,7 +193,8 @@ export function setGlobalMatrices(_mat_view) {
 
 // Just set up mat_vp and mat_projection
 export function setMatVP(_mat_view) {
-  // eslint-disable-next-line no-use-before-define
+  assert(mat4isFinite(_mat_view));
+  // eslint-disable-next-line @typescript-eslint/no-use-before-define
   setupProjection(fov_y, width_3d, height_3d, ZNEAR, ZFAR);
   mat4Copy(mat_view, _mat_view);
   mat4Mul(mat_vp, mat_projection, mat_view);
@@ -219,8 +264,12 @@ export function reloadSafe() {
     try {
       window.top.location.reload();
     } catch (e) {
-      // Not good, but better than the alternatives, I guess
-      window.FBInstant.quit();
+      try {
+        document.location.reload();
+      } catch {
+        // Not good, but better than the alternatives, I guess
+        window.FBInstant.quit();
+      }
     }
   } else {
     document.location.reload();
@@ -234,6 +283,14 @@ export function defineCausesReload(define) {
 }
 defineCausesReload('FORCEWEBGL2');
 defineCausesReload('NOWEBGL2');
+let define_change_cbs = {};
+export function defineOnChange(define, cb) {
+  let elem = define_change_cbs[define] = define_change_cbs[define] || {
+    value: defines[define],
+    cbs: [],
+  };
+  elem.cbs.push(cb);
+}
 export function definesChanged() {
   for (let key in reloading_defines) {
     if (defines[key] !== reloading_defines[key]) {
@@ -241,7 +298,25 @@ export function definesChanged() {
       break;
     }
   }
-  shaders.handleDefinesChanged();
+  for (let key in define_change_cbs) {
+    let elem = define_change_cbs[key];
+    if (defines[key] !== elem.value) {
+      elem.value = defines[key];
+      callEach(elem.cbs);
+    }
+  }
+  shadersHandleDefinesChanged();
+}
+export function definesClearAll() {
+  let any_changed = false;
+  for (let key in defines) {
+    defines[key] = false;
+    any_changed = true;
+  }
+  if (any_changed) {
+    definesChanged();
+  }
+  return any_changed;
 }
 
 function normalizeRow(m, idx) {
@@ -303,6 +378,7 @@ export function setState(new_state) {
   } else {
     app_state = new_state;
   }
+  renderNeeded();
 }
 
 export function stateActive(test_state) {
@@ -321,6 +397,7 @@ let mspf_tick = 1000;
 // let net_time = 1000;
 let mspf_tick_accum = 0;
 // let net_time_accum = 0;
+let garbage_estimate = 0;
 export const PERF_HISTORY_SIZE = 128;
 export let perf_state = window.glov_perf_state = {
   fpsgraph: {
@@ -342,6 +419,7 @@ perf.addMetric({
     'fps: ': () => (1000 / mspf).toFixed(1),
     'ms/f: ': () => mspf.toFixed(0),
     'cpu: ': () => mspf_tick.toFixed(0),
+    'gc/f: ': () => (garbage_estimate ? garbage_estimate.toFixed(1) : ''),
     // 'net: ': () => net_time.toFixed(0),
   },
   data: fpsgraph, // contain .index and .history (stride of colors.length)
@@ -519,6 +597,7 @@ function checkResize() {
 
     // For the next 10 frames, make sure font size is correct
     need_repos = 10;
+    renderNeeded();
   }
   if (is_ios_safari && (window.visualViewport || need_repos)) {
     // we have accurate view information, or screen was just rotated / resized
@@ -552,18 +631,18 @@ function requestFrame(user_time) {
     // Ensure we have at least that many frames queued up at any point in time, so they
     // can fire at less than the normal 4ms browser delay of setTimeout()
     while (frames_requested < desired_frames) {
-      // eslint-disable-next-line no-use-before-define
+      // eslint-disable-next-line @typescript-eslint/no-use-before-define
       setTimeout(tick, 1);
       frames_requested++;
     }
-  } else if (max_fps) {
+  } else if (max_fps && max_fps > settings.use_animation_frame) {
     let desired_delay = max(0, round(1000 / max_fps - (user_time || 0)));
     frames_requested++;
-    // eslint-disable-next-line no-use-before-define
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define
     setTimeout(tick, desired_delay);
   } else {
     frames_requested++;
-    // eslint-disable-next-line no-use-before-define
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define
     requestAnimationFrame(tick);
   }
 }
@@ -660,6 +739,7 @@ export function startSpriteRendering() {
   gl.enable(gl.BLEND);
   gl.disable(gl.DEPTH_TEST);
   gl.depthMask(false);
+  spriteDrawReset();
 }
 
 export function projectionZBias(dist, at_z) {
@@ -692,15 +772,15 @@ export function fixNatives(is_startup) {
 }
 
 function resetState() {
-  // Only geom.geomResetState appears to have been strictly needed to work around
+  // Only geomResetState appears to have been strictly needed to work around
   //  a bug on Chrome 71, but doing the rest of this to be safe.
   profilerStart('resetState');
   profilerStart('textures');
-  textures.texturesResetState();
+  textureResetState();
   profilerStopStart('shaders');
-  shaders.shadersResetState();
+  shadersResetState();
   profilerStopStart('geom;gl');
-  geom.geomResetState();
+  geomResetState();
 
   // These should already be true:
   blendModeReset(true);
@@ -723,19 +803,55 @@ function resetState() {
   profilerStop('resetState');
 }
 
-export const hrnow = window.performance ? window.performance.now.bind(window.performance) : Date.now.bind(Date);
-
 let in_background = false;
+let enter_background_cb = [];
+let exit_background_cb = [];
 export function isInBackground() {
   return in_background;
 }
+export function onEnterBackground(fn) {
+  enter_background_cb.push(fn);
+}
+export function onExitBackground(fn) {
+  exit_background_cb.push(fn);
+}
+
+export function dirtyRenderSet(value) {
+  dirty_render = value;
+}
+
+export const hrnow = window.performance && window.performance.now ?
+  window.performance.now.bind(window.performance) :
+  Date.now.bind(Date);
 
 let last_tick = 0;
+let last_tick_hr = 0;
+let frame_limit_time_left = 0;
 function tick(timestamp) {
   profilerFrameStart();
   profilerStart('tick');
   profilerStart('top');
   frames_requested--;
+
+  if (render_frames_needed) {
+    --render_frames_needed;
+  }
+  if (dirty_render && !render_frames_needed) {
+    resetEffects();
+    input.tickInputInactive();
+    last_tick_cpu = 0;
+    for (let ii = post_tick.length - 1; ii >= 0; --ii) {
+      if (post_tick[ii].inactive && !--post_tick[ii].ticks) {
+        post_tick[ii].fn();
+        ridx(post_tick, ii);
+      }
+    }
+    requestFrame();
+    profilerStop();
+    return profilerStop('tick');
+  }
+
+
   // if (timestamp < 1e12) { // high resolution timer
   //   this ends up being a value way back in time, relative to what hrnow() returns,
   //   and even back in time relative to input events already dispatched,
@@ -744,6 +860,27 @@ function tick(timestamp) {
   // } else { // probably integer milliseconds since epoch, or nothing
   hrtime = hrnow();
   // }
+
+  let dt_raw = hrtime - last_tick_hr;
+  last_tick_hr = hrtime;
+  let max_fps = settings.max_fps;
+  if (max_fps && max_fps <= settings.use_animation_frame) {
+    // using requestAnimationFrame, need to apply max_fps ourselves
+    let frame_time = 1000 / max_fps - 0.1;
+    frame_limit_time_left -= dt_raw;
+    if (frame_limit_time_left > 0) {
+      // too early, skip this frame, do not count any of this time, pretend this frame never happened.
+      requestFrame();
+      profilerStop('top');
+      return profilerStop('tick');
+    }
+    frame_limit_time_left += frame_time;
+    if (frame_limit_time_left < 0) {
+      // more than two frames passed, don't accumulate extra frames
+      frame_limit_time_left = 0;
+    }
+  }
+
   let now = round(hrtime); // Code assumes integer milliseconds
   if (!last_tick) {
     last_tick = now;
@@ -774,6 +911,7 @@ function tick(timestamp) {
       mspf = (now - mspf_update_time) / mspf_frame_count;
       mspf_tick = mspf_tick_accum / mspf_frame_count;
       mspf_tick_accum = 0;
+      garbage_estimate = profilerGarbageEstimate() / 1024;
       // net_time = net_time_accum / mspf_frame_count;
       // net_time_accum = 0;
       mspf_frame_count = 0;
@@ -801,7 +939,7 @@ function tick(timestamp) {
   }
   if (in_background) {
     in_background = false;
-    soundResume();
+    callEach(exit_background_cb);
   }
 
   checkResize();
@@ -822,8 +960,9 @@ function tick(timestamp) {
 
   resetState();
 
-  textures.bind(0, textures.textures.error);
+  textureBind(0, textureError());
 
+  fontTick();
   camera2d.tickCamera2D();
   glov_transition.render(dt);
   camera2d.setAspectFixed(game_width, game_height);
@@ -832,7 +971,7 @@ function tick(timestamp) {
 
   soundTick(dt);
   input.tickInput();
-  glov_ui.tickUI(dt);
+  uiTick(dt);
 
   if (need_repos) {
     --need_repos;
@@ -852,10 +991,10 @@ function tick(timestamp) {
 
   if (do_borders) {
     // Borders
-    glov_ui.drawRect(camera2d.x0Real(), camera2d.y0Real(), camera2d.x1Real(), 0, Z.BORDERS, border_color);
-    glov_ui.drawRect(camera2d.x0Real(), game_height, camera2d.x1Real(), camera2d.y1Real(), Z.BORDERS, border_color);
-    glov_ui.drawRect(camera2d.x0Real(), 0, 0, game_height, Z.BORDERS, border_color);
-    glov_ui.drawRect(game_width, 0, camera2d.x1Real(), game_height, Z.BORDERS, border_color);
+    drawRect(camera2d.x0Real(), camera2d.y0Real(), camera2d.x1Real(), 0, Z.BORDERS, border_color);
+    drawRect(camera2d.x0Real(), game_height, camera2d.x1Real(), camera2d.y1Real(), Z.BORDERS, border_color);
+    drawRect(camera2d.x0Real(), 0, 0, game_height, Z.BORDERS, border_color);
+    drawRect(game_width, 0, camera2d.x1Real(), game_height, Z.BORDERS, border_color);
   }
 
   perf.draw();
@@ -870,7 +1009,7 @@ function tick(timestamp) {
 
   profilerStopStart('bottom');
   spotEndInput();
-  // glov_particles.tick(dt); // *after* app_tick, so newly added/killed particles can be queued into the draw list
+  glov_particles.tick(dt); // *after* app_tick, so newly added/killed particles can be queued into the draw list
 
   if (had_3d_this_frame) {
     if (had_render_scale_3d_this_frame) {
@@ -904,9 +1043,9 @@ function tick(timestamp) {
   }
 
   startSpriteRendering();
-  sprites.draw();
+  spriteDraw();
 
-  glov_ui.endFrame();
+  uiEndFrame();
 
   if (post_render) {
     callEach(post_render, post_render = null);
@@ -933,7 +1072,7 @@ function tick(timestamp) {
 
   input.endFrame();
   resetEffects();
-  texturesTick();
+  textureTick();
 
   for (let ii = post_tick.length - 1; ii >= 0; --ii) {
     if (!--post_tick[ii].ticks) {
@@ -949,14 +1088,25 @@ function tick(timestamp) {
   return profilerStop('tick');
 }
 
+let blurred = false;
+function onBlur(evt) {
+  blurred = true;
+}
+
+function onFocus(evt) {
+  blurred = false;
+}
+
 function periodiclyRequestFrame() {
   requestFrame();
-  setTimeout(periodiclyRequestFrame, 5000);
+  setTimeout(periodiclyRequestFrame, 1000);
 
-  let now = round(hrnow());
-  if (now - last_tick > 2000) {
-    in_background = true;
-    soundPause();
+  if (!in_background && blurred) {
+    let now = round(hrnow());
+    if (now - last_tick > 400) {
+      in_background = true;
+      callEach(enter_background_cb);
+    }
   }
 }
 
@@ -980,7 +1130,7 @@ export function setViewportPostprocess(viewport_postprocess) {
 
 export function setFonts(new_font, title_font) {
   font = new_font;
-  glov_ui.setFonts(new_font, title_font);
+  uiSetFonts(new_font, title_font);
 }
 
 export function engineStartupFunc(func) {
@@ -990,14 +1140,18 @@ export function engineStartupFunc(func) {
 export function startup(params) {
   fixNatives(true);
 
+  assert(window.glov_webfs, 'Failed to load fsdata.js');
+  webFSStartup(window.glov_webfs, urlhash.getURLBase());
+
   canvas = document.getElementById('canvas');
   safearea_elem = document.getElementById('safearea');
 
-  if (params.error_report !== false) {
-    window.glov_error_report = (msg, file, line, col) => {
-      setTimeout(requestFrame, 1);
-      return glovErrorReport(true, msg, file, line, col);
-    };
+  if (params.error_report === false) {
+    glovErrorReportDisableSubmit();
+  }
+
+  if (DEBUG) {
+    dataErrorQueueEnable(true);
   }
 
   if (DEBUG && !window.spector) {
@@ -1071,12 +1225,48 @@ export function startup(params) {
     // SamsungBrowser/1.1 - apparently has WebGL, but not requestAnimationFrame; also not binary WebSockets
     good = false;
   }
+  if (good) {
+    // ensure at least basic shaders compile
+    let shaders_supported = shadersStartup({
+      light_diffuse,
+      light_dir_ws,
+      ambient: light_ambient,
+      mat_m: mat_m,
+      mat_mv: mat_mv,
+      mat_vp: mat_vp,
+      mvp: mat_mvp,
+      mv_inv_trans: mat_mv_inv_transform,
+      mat_inv_view: mat_inv_view,
+      view: mat_view,
+      projection: mat_projection,
+      // projection_inverse,
+    });
+    if (!shaders_supported) {
+      good = false;
+    }
+  }
+
   if (!good) {
     // eslint-disable-next-line no-alert
-    window.alert('Sorry, but your browser does not support WebGL or does not have it enabled.');
+    window.alert(`${
+      window.gl ?
+        'Error initializing WebGL.\n' :
+        'Error initializing WebGL: your browser does not support WebGL or does not have it enabled.\n'}` +
+      'Try completely closing and re-opening the app or browser.' +
+      '  If the problem persists, try restarting your device.');
     document.getElementById('loading').style.visibility = 'hidden';
     document.getElementById('nowebgl').style.visibility = 'visible';
     return false;
+  }
+
+  glovErrorReportSetCrashCB(function () {
+    setTimeout(requestFrame, 1);
+  });
+
+  let nocanvas = document.getElementById('nocanvas');
+  if (verify(nocanvas)) {
+    // hide the interior of the <canvas> elements, so that the get.webgl.org link is not focusable!
+    nocanvas.style.visibility = 'hidden';
   }
   console.log(`Using WebGL${webgl2?2:1}`);
 
@@ -1097,37 +1287,25 @@ export function startup(params) {
   gl.clearColor(0, 0.1, 0.2, 1);
   gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1); // Allow RGB texture data with non-mult-4 widths
 
-  textures.startup();
-  geom.startup();
-  shaders.startup({
-    light_diffuse,
-    light_dir_ws,
-    ambient: light_ambient,
-    mat_m: mat_m,
-    mat_mv: mat_mv,
-    mat_vp: mat_vp,
-    mvp: mat_mvp,
-    mv_inv_trans: mat_mv_inv_transform,
-    mat_inv_view: mat_inv_view,
-    view: mat_view,
-    projection: mat_projection,
-    // projection_inverse,
-  });
+  textureStartup();
+  geomStartup();
   addViewSpaceGlobal('light_dir');
   camera2d.startup();
-  sprites.startup();
+  spriteStartup();
   input.startup(canvas, params);
-  models.startup();
+  modelStartup();
+
+  window.addEventListener('blur', onBlur, false);
+  window.addEventListener('focus', onFocus, false);
 
   /* eslint-disable global-require */
   glov_particles = require('./particles.js').create();
 
   if (is_pixely) {
-    textures.defaultFilters(gl.NEAREST, gl.NEAREST);
+    textureDefaultFilters(gl.NEAREST, gl.NEAREST);
     settings.runTimeDefault('render_scale_mode', 1);
-    params.ui_sprites = defaults(params.ui_sprites || {}, glov_ui.ui_sprites_pixely);
   } else {
-    textures.defaultFilters(gl.LINEAR_MIPMAP_LINEAR, gl.LINEAR);
+    textureDefaultFilters(gl.LINEAR_MIPMAP_LINEAR, gl.LINEAR);
   }
 
   assert(params.font);
@@ -1146,13 +1324,10 @@ export function startup(params) {
   if (params.title_font) {
     params.title_font = glov_font.create(params.title_font.info, params.title_font.texture);
   }
-  glov_ui.startup(params);
+  uiStartup(params);
 
   soundStartup(params.sound);
-  glov_ui.bindSounds(defaults(params.ui_sounds || {}, {
-    button_click: 'button_click',
-    rollover: 'rollover',
-  }));
+  uiBindSounds(params.ui_sounds);
 
   buildUIStartup();
   shaderDebugUIStartup();
@@ -1171,13 +1346,49 @@ export function startup(params) {
   if (params.show_fps !== undefined) {
     settings.show_fps = params.show_fps;
   }
+  dirty_render = Boolean(params.dirty_render);
 
   periodiclyRequestFrame();
   return true;
 }
 
+let custom_loads_pending = 0;
+export function loadPendingDelta(delta) {
+  custom_loads_pending += delta;
+}
+
 export function loadsPending() {
-  return textures.load_count + soundLoading() + models.load_count;
+  return textureLoadCount() + soundLoading() + modelLoadCount() + custom_loads_pending;
+}
+
+let on_load_metrics = [];
+export function onLoadMetrics(cb) {
+  on_load_metrics.push(cb);
+}
+
+onLoadMetrics((obj) => {
+  console.log([
+    'Load time summary',
+    `  ${obj.time_js_load}ms JS load`,
+    `  ${obj.time_js_init}ms JS init`,
+    `  ${obj.time_resource_load}ms resource load`,
+    `${obj.time_total}ms total`
+  ].join('\n'));
+});
+
+function loadingFinished() {
+  let now = Date.now();
+  let time_js_load = window.time_load_onload - window.time_load_start;
+  let time_js_init = window.time_load_init - window.time_load_onload;
+  let time_resource_load = now - window.time_load_init;
+  let time_total = now - window.time_load_start;
+  callEach(on_load_metrics, null, {
+    time_js_load,
+    time_js_init,
+    time_resource_load,
+    time_total,
+  });
+  profanityStartupLate();
 }
 
 function loading() {
@@ -1186,6 +1397,7 @@ function loading() {
   if (elem_loading_text) {
     elem_loading_text.innerText = `Loading (${load_count})...`;
   }
+  renderNeeded();
   if (!load_count) {
     is_loading = false;
     app_state = after_loading_state;
@@ -1193,6 +1405,8 @@ function loading() {
     postTick({
       ticks: 2,
       fn: function () {
+        loadingFinished();
+        renderNeeded();
         let loading_elem = document.getElementById('loading');
         if (loading_elem) {
           loading_elem.style.visibility = 'hidden';

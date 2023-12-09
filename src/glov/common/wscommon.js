@@ -9,8 +9,8 @@ const ack = require('./ack.js');
 const assert = require('assert');
 const { ackHandleMessage, ackReadHeader, ackWrapPakStart, ackWrapPakPayload, ackWrapPakFinish } = ack;
 const { random, round } = Math;
-const packet = require('./packet.js');
-const { isPacket, packetCreate, packetFromBuffer } = packet;
+const { isPacket, packetCreate, packetDefaultFlags, packetFromBuffer } = require('./packet.js');
+const { perfCounterAddValue } = require('./perfcounters.js');
 
 export const CONNECTION_TIMEOUT = 60000;
 export const PING_TIME = CONNECTION_TIMEOUT / 2;
@@ -123,6 +123,7 @@ export function wsPakSendDest(client, pak) {
   if (buf_len !== buf.length) {
     buf = new Uint8Array(buf.buffer, buf.byteOffset, buf_len);
   }
+  perfCounterAddValue('net.send_bytes.total', buf.length);
   wsstats_out.msgs++;
   wsstats_out.bytes += buf.length;
   if (net_delay) {
@@ -192,15 +193,15 @@ function wsPakSend(err, resp_func) {
   wsPakSendFinish(pak, err, resp_func);
 }
 
-export function wsPak(msg, ref_pak, client) {
+export function wsPak(msg, ref_pak, client, msg_debug_name) {
   assert(typeof msg === 'string' || typeof msg === 'number');
 
   // Assume new packet needs to be comparable to old packet, in flags and size
-  let pak = packetCreate(ref_pak ? ref_pak.getInternalFlags() : packet.default_flags,
+  let pak = packetCreate(ref_pak ? ref_pak.getInternalFlags() : packetDefaultFlags(),
     ref_pak ? ref_pak.totalSize() + PAK_HEADER_SIZE : 0);
   pak.writeFlags();
 
-  ackWrapPakStart(pak, client, msg);
+  ackWrapPakStart(pak, client, msg, msg_debug_name);
 
   pak.ws_data = {
     msg,
@@ -210,9 +211,9 @@ export function wsPak(msg, ref_pak, client) {
   return pak;
 }
 
-function sendMessageInternal(client, msg, err, data, resp_func) {
+function sendMessageInternal(client, msg, err, data, msg_debug_name, resp_func) {
   let is_packet = isPacket(data);
-  let pak = wsPak(msg, is_packet ? data : null, client);
+  let pak = wsPak(msg, is_packet ? data : null, client, msg_debug_name);
 
   if (!err) {
     ackWrapPakPayload(pak, data);
@@ -221,8 +222,9 @@ function sendMessageInternal(client, msg, err, data, resp_func) {
   pak.send(err, resp_func);
 }
 
-export function sendMessage(msg, data, resp_func) {
-  sendMessageInternal(this, msg, null, data, resp_func); // eslint-disable-line @typescript-eslint/no-invalid-this
+export function sendMessage(msg, data, msg_debug_name, resp_func) {
+  // eslint-disable-next-line @typescript-eslint/no-invalid-this
+  sendMessageInternal(this, msg, null, data, msg_debug_name, resp_func);
 }
 
 export function wsHandleMessage(client, buf, filter) {
@@ -256,7 +258,7 @@ export function wsHandleMessage(client, buf, filter) {
     if (resp_func && !resp_func.expecting_response) {
       resp_func = null;
     }
-    sendMessageInternal(client, msg, err, data, resp_func);
+    sendMessageInternal(client, msg, err, data, null, resp_func);
   }, function pakFunc(msg, ref_pak) {
     return wsPak(msg, ref_pak, client);
   }, function handleFunc(msg, data, resp_func) {

@@ -1,5 +1,4 @@
 const assert = require('assert');
-const path = require('path');
 const gb = require('glov-build');
 const browserify = require('glov-build-browserify');
 const concat = require('glov-build-concat');
@@ -22,7 +21,6 @@ const babelify_opts_deps = {
       },
       'loose': true,
     }],
-    '@babel/preset-typescript'
   ]
 };
 
@@ -32,21 +30,12 @@ const browserify_options_deps = {
     // super-simple replacements, if needed
     assert: './src/glov/client/shims/assert.js',
     buffer: './src/glov/client/shims/buffer.js',
-    not_worker: './src/glov/client/shims/not_worker.js',
     // timers: './src/glov/client/shims/timers.js',
     _process: './src/glov/client/shims/empty.js',
   },
   transform: [
     ['babelify', babelify_opts_deps],
   ],
-};
-
-const browserify_options_deps_worker = {
-  ...browserify_options_deps,
-  builtins: {
-    ...browserify_options_deps.builtins,
-    not_worker: null, // cause failure if any module does a `require('not_worker')`
-  },
 };
 
 
@@ -90,8 +79,9 @@ function bundlePair(opts) {
     deps_out,
     post_bundle_cb,
     bundle_uglify_opts,
+    ban_deps,
   } = opts;
-  let subtask_name = `bundle_${path.basename(entrypoint)}`;
+  let subtask_name = `bundle_${entrypoint.replace(/^client\//, '').replace(/\//g, '_')}`;
 
   let tasks = [];
 
@@ -108,6 +98,9 @@ function bundlePair(opts) {
     browserify: browserify_options_entrypoint,
     post_bundle_cb,
   };
+  if (ban_deps) {
+    entrypoint_subbundle_opts.ban_deps = ban_deps;
+  }
   gb.task({
     name: entrypoint_name,
     target: (do_final_bundle || bundle_uglify_opts) ? undefined : target,
@@ -139,7 +132,7 @@ function bundlePair(opts) {
         entrypoint: deps,
         source: deps_source,
         out: deps_out,
-        browserify: is_worker ? browserify_options_deps_worker : browserify_options_deps,
+        browserify: browserify_options_deps,
         post_bundle_cb,
       }),
     });

@@ -8,10 +8,15 @@ const { max } = Math;
 
 const trans_src = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+';
 const trans_dst = '4bcd3fgh1jk1mn0pqr57uvwxy24bcd3fgh1jk1mn0pqr57uvwxy201234567897';
-const trans_src_regex = /[a-zA-Z0-9+]+/g;
+const trans_src_regex = /\S+/g;
 let trans_lookup = {};
+const unicode_replacement_chars = {};
+function cannonizeCharacter(c) {
+  c = unicode_replacement_chars[c] || c;
+  return trans_lookup[c] || '';
+}
 function canonize(str) {
-  return str.split('').map((c) => (trans_lookup[c] || c)).join('');
+  return str.split('').map(cannonizeCharacter).join('');
 }
 
 function rot13(str) {
@@ -65,11 +70,32 @@ export function profanityCommonStartup(filter_gkg, exceptions_txt) {
   }
 }
 
-export function reservedStartup(reserved_txt) {
+export function profanitySetReplacementChars(replacement_chars) {
+  assert(replacement_chars);
+  for (let char_code_str in replacement_chars) {
+    let target = replacement_chars[char_code_str];
+    target = String.fromCharCode(target);
+    let source = String.fromCharCode(Number(char_code_str));
+    if (target === ' ') {
+      if (source.trim() !== '') {
+        // Replacing with space, but Javascript does not treat it as whitespace, do not allow
+        console.log(`Invalid whitespace replacement character: ${char_code_str}`);
+        continue;
+      }
+    }
+    unicode_replacement_chars[source] = target;
+  }
+}
+
+let reserved_substrings = [];
+export function reservedStartup(reserved_txt, reserved_substrings_in) {
   let data = reserved_txt.split('\n').filter((a) => a);
   for (let i = 0; i < data.length; ++i) {
     let string = canonize(data[i]);
     reserved[string] = 1;
+  }
+  for (let ii = 0; ii < reserved_substrings_in.length; ++ii) {
+    reserved_substrings.push(canonize(reserved_substrings_in[ii]));
   }
 }
 
@@ -128,8 +154,14 @@ export function isProfane(user_str) {
 
 let is_reserved;
 function checkReserved(word_src) {
-  if (reserved[canonize(word_src)]) {
+  word_src = canonize(word_src);
+  if (reserved[word_src]) {
     is_reserved = true;
+  }
+  for (let ii = 0; ii < reserved_substrings.length; ++ii) {
+    if (word_src.includes(reserved_substrings[ii])) {
+      is_reserved = true;
+    }
   }
 }
 
@@ -137,5 +169,11 @@ export function isReserved(user_str) {
   assert(inited);
   is_reserved = false;
   user_str.replace(trans_src_regex, checkReserved);
+  let no_whitespace = canonize(user_str.replace(/[\s_.]/g, ''));
+  for (let ii = 0; ii < reserved_substrings.length; ++ii) {
+    if (no_whitespace.includes(reserved_substrings[ii])) {
+      is_reserved = true;
+    }
+  }
   return is_reserved;
 }

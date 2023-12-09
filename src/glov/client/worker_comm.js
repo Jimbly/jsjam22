@@ -5,9 +5,8 @@
 
 // Do not require anything significant from this file, so it loads super quickly
 // Maybe need to add a separate bootstrap if we need to require much.
-const assert = require('assert');
-
-require('not_worker'); // This module cannot be required from a worker bundle
+import assert from 'assert';
+import { webFSGetData, webFSSetToWorkerCB } from './webfs';
 
 let workers = [];
 
@@ -17,7 +16,8 @@ export function numWorkers() {
 
 let handlers = {};
 
-export const ALL = -1;
+export const WORKER_ALL = -1;
+module.exports.ALL = WORKER_ALL;
 
 // cb(worker_index, data)
 export function addHandler(msg, cb) {
@@ -25,15 +25,16 @@ export function addHandler(msg, cb) {
   handlers[msg] = cb;
 }
 
-export function sendmsg(worker_index, id, data, transfer) {
-  if (worker_index === ALL) {
+export function workerCommSendMsg(worker_index, id, data, transfer) {
+  if (worker_index === WORKER_ALL) {
     for (let ii = 0; ii < workers.length; ++ii) {
-      sendmsg(ii, id, data);
+      workerCommSendMsg(ii, id, data);
     }
   } else {
     workers[worker_index].postMessage({ id, data }, transfer);
   }
 }
+module.exports.sendmsg = workerCommSendMsg;
 
 function workerOnMessage(worker_index, evt) {
   evt = evt.data;
@@ -66,6 +67,10 @@ function allocWorker(idx, worker_filename) {
   worker.onmessage = workerOnMessage.bind(null, workers.length);
   worker.onerror = workerOnError;
   workers.push(worker);
+
+  if (webFSGetData()) {
+    workerCommSendMsg(idx, 'webfs_data', webFSGetData());
+  }
 }
 
 export function setNumWorkers(max_workers, worker_filename) {
@@ -92,15 +97,19 @@ export function startup(worker_filename, debug_names_in) {
   });
   addHandler('busy_done', function (source) {
     if (source < keep_busy) {
-      sendmsg(source, 'busy', 1000);
+      workerCommSendMsg(source, 'busy', 1000);
     }
   });
+  webFSSetToWorkerCB(function (fs) {
+    workerCommSendMsg(WORKER_ALL, 'webfs_data', fs);
+  });
+
   allocWorker(0, worker_filename);
 }
 
 export function keepBusy(num_workers) {
   for (let ii = keep_busy; ii < num_workers; ++ii) {
-    sendmsg(ii, 'busy', 1000);
+    workerCommSendMsg(ii, 'busy', 1000);
   }
   keep_busy = num_workers;
 }

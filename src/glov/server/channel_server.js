@@ -13,6 +13,7 @@ const { ackWrapPakStart, ackWrapPakFinish, ackWrapPakPayload } = require('glov/c
 const assert = require('assert');
 const { asyncParallel, asyncSeries } = require('glov-async');
 const cmd_parse = require('glov/common/cmd_parse.js');
+const { dataErrorQueueGet } = require('glov/common/data_error.js');
 const { cwstats, ChannelWorker, UNACKED_PACKET_ASSUME_GOOD } = require('./channel_worker.js');
 const client_comm = require('./client_comm.js');
 const { ds_stats, dataStoreMonitorFlush } = require('./data_store.js');
@@ -20,16 +21,16 @@ const { dss_stats } = require('./data_store_shield.js');
 const default_workers = require('./default_workers.js');
 const { ERR_NOT_FOUND } = require('./exchange.js');
 const fs = require('fs');
+const { keyMetricsFlush } = require('./key_metrics.js');
 const log = require('./log.js');
 const { logEx, logDowngradeErrors, logDumpJSON } = log;
 const { min, round } = Math;
 const metrics = require('./metrics.js');
 const os = require('os');
-const packet = require('glov/common/packet.js');
-const { isPacket, packetCreate } = packet;
+const { isPacket, packetCreate, packetDefaultFlags } = require('glov/common/packet.js');
 const path = require('path');
 const { perfCounterHistory, perfCounterTick } = require('glov/common/perfcounters.js');
-const { panic, sendToBuildClients } = require('./server.js');
+const { onpanic, panic, sendToBuildClients } = require('./server.js');
 const { processUID } = require('./server_config.js');
 const { callEach, clone, cloneShallow, identity, logdata, once } = require('glov/common/util.js');
 const { inspect } = require('util');
@@ -97,6 +98,21 @@ function formatLocalError(e) {
   return lines.join('\n');
 }
 
+let outstanding_sends = {}; // msg -> [count, size]
+function logOutstandingSends() {
+  let keys = Object.keys(outstanding_sends);
+  if (keys.length) {
+    let msg = [];
+    for (let ii = 0; ii < keys.length; ++ii) {
+      let key = keys[ii];
+      let pair = outstanding_sends[key];
+      msg.push(`${key}:${pair[0]}/${pair[1]}`);
+    }
+    console.error(`Outstanding message exchange sends: ${msg.join(', ')}`);
+  }
+}
+onpanic(logOutstandingSends);
+
 function channelServerSendFinish(pak, err, resp_func) {
   if (resp_func) {
     // This function will get called twice if we have a network disconnect
@@ -125,9 +141,11 @@ function channelServerSendFinish(pak, err, resp_func) {
   assert.equal(expecting_response, Boolean(ack_resp_pkt_id));
   if (expecting_response) {
     // Wrap this so we track if it was ack'd
-    assert(source.resp_cbs[ack_resp_pkt_id]);
-    assert.equal(source.resp_cbs[ack_resp_pkt_id], resp_func);
-    source.resp_cbs[ack_resp_pkt_id] = function (err, resp) {
+    let resp_pair = source.resp_cbs[ack_resp_pkt_id];
+    assert(resp_pair);
+    assert.equal(resp_pair.func, resp_func);
+    assert(resp_pair.ack_name);
+    resp_pair.func = function (err, resp) {
       // Acks may not be in order, so we just care about the highest id,
       // everything sent before that *must* have been dispatched, even if not
       // yet ack'd.  Similarly, don't reset to a lower id when a slow operation's
@@ -154,7 +172,26 @@ function channelServerSendFinish(pak, err, resp_func) {
       }
     };
   }
+  let pak_total_size = pak.totalSize();
+  let out_track_pair = outstanding_sends[msg];
+  if (!out_track_pair) {
+    outstanding_sends[msg] = out_track_pair = [1,pak_total_size];
+  } else {
+    out_track_pair[0]++;
+    out_track_pair[1] += pak_total_size;
+  }
+  let complete_called = false;
+  function onSendComplete() {
+    assert(!complete_called);
+    complete_called = true;
+    out_track_pair[0]--;
+    out_track_pair[1] -= pak_total_size;
+    if (!out_track_pair[0]) {
+      delete outstanding_sends[msg];
+    }
+  }
   function finalError(err) {
+    onSendComplete();
     if (ack_resp_pkt_id) {
       // Callback will never be dispatched through ack.js, remove the callback here
       delete source.resp_cbs[ack_resp_pkt_id];
@@ -178,6 +215,7 @@ function channelServerSendFinish(pak, err, resp_func) {
     }
     return channel_server.exchange.publish(dest, pak, function (err) {
       if (!err) {
+        onSendComplete();
         // Sent successfully, resp_func called when other side ack's.
         if (pak.no_local_bypass) {
           delete pak.no_local_bypass;
@@ -271,7 +309,7 @@ export function channelServerPak(source, dest, msg, ref_pak, q, debug_msg) {
   assert(source.send_pkt_idx);
 
   // Assume new packet needs to be comparable to old packet, in flags and size
-  let pak = packetCreate(ref_pak ? ref_pak.getInternalFlags() : packet.default_flags,
+  let pak = packetCreate(ref_pak ? ref_pak.getInternalFlags() : packetDefaultFlags(),
     ref_pak ? ref_pak.totalSize() + PAK_HEADER_SIZE : 0);
   pak.writeFlags();
   let pkt_idx_offs = pak.getOffset();
@@ -401,6 +439,11 @@ export class ChannelServer {
     this.restarting = false;
     this.server_time = 0;
     this.reportPerfCounters = this.reportPerfCounters.bind(this);
+    // Monotonicly increasing count of exchange pings. Can be used as a counter
+    //   for exchange-dependent operations (such as timeouts waiting for a response)
+    //   that increases directly proportionally to communication latency.
+    this.exchange_pings = 0;
+    this.last_tick_timestamp = Date.now();
   }
 
   // The master requested that we create a worker
@@ -651,6 +694,7 @@ export class ChannelServer {
     this.csworker.log(`restarting = ${data}`);
     this.ws_server.restarting = this.restarting = data;
     if (this.restarting) {
+      keyMetricsFlush();
       logDowngradeErrors(true);
     } else {
       logDowngradeErrors(false);
@@ -686,7 +730,7 @@ export class ChannelServer {
       if (client) {
         if (data.sysadmin) { // Send to system admins only
           let { client_channel } = client;
-          if (!client_channel || !client_channel.ids || !client_channel.ids.sysadmin) {
+          if (!client_channel || !client_channel.ids || !(client_channel.ids.sysadmin || client_channel.ids.csr)) {
             continue;
           }
         }
@@ -739,7 +783,6 @@ export class ChannelServer {
 
     this.tick_func = this.doTick.bind(this);
     this.tick_time = 250;
-    this.last_tick_timestamp = Date.now();
     this.last_server_time_send = 0;
     this.server_time_send_interval = 5000;
     this.load_report_time = 1; // report immediately
@@ -754,10 +797,6 @@ export class ChannelServer {
       count: 0,
       countdown: 1, // ping immediately
     };
-    // Monotonicly increasing count of exchange pings. Can be used as a counter
-    //   for exchange-dependent operations (such as timeouts waiting for a response)
-    //   that increases directly proportionally to communication latency.
-    this.exchange_pings = 0;
     setTimeout(this.tick_func, this.tick_time);
     this.csworker.log('Channel server started');
   }
@@ -996,11 +1035,17 @@ export class ChannelServer {
         useful for low-level messages that are handled internally ("apply_channel_data")
     }
    */
-  registerChannelWorker(channel_type, ctor, options) {
-    options = options || {};
+  registerChannelWorker(channel_type, ctor, options_in) {
+    if (options_in) {
+      ctor.workerExtend(options_in);
+    }
+    assert(!ctor.has_been_registered);
+    ctor.has_been_registered = true;
+    let options = ctor.init_data;
     assert(!this.channel_types[channel_type]);
     this.channel_types[channel_type] = ctor;
     ctor.autocreate = options.autocreate;
+    assert(options.subid_regex);
     ctor.subid_regex = options.subid_regex;
 
     ctor.prototype.perf_prefix = `cw.${channel_type}.`;
@@ -1063,7 +1108,7 @@ export class ChannelServer {
       }
 
       // Built-in and default filters
-      if (ctor.prototype.maintain_client_list) {
+      if (ctor.prototype.maintain_client_list || ctor.prototype.workerOnChannelData) {
         addUnique(filters, 'channel_data', ChannelWorker.prototype.onChannelData);
         addUnique(filters, 'apply_channel_data', ChannelWorker.prototype.onApplyChannelData);
       }
@@ -1090,8 +1135,38 @@ export class ChannelServer {
 
   getStatus() {
     let lines = [];
-    let num_clients = Object.keys(this.ws_server.clients).length;
-    lines.push(`Clients: ${num_clients}`);
+    let clients_by_platform = Object.create(null);
+    let clients_by_ver = Object.create(null);
+    let { clients } = this.ws_server;
+    let num_clients = 0;
+    for (let client_id in clients) {
+      let client = clients[client_id];
+      let plat = client.client_plat;
+      if (plat) {
+        clients_by_platform[plat] = (clients_by_platform[plat] || 0) + 1;
+      }
+      let ver = client.client_ver;
+      if (ver) {
+        clients_by_ver[ver] = (clients_by_ver[ver] || 0) + 1;
+      }
+      ++num_clients;
+    }
+    let sub_summary = [];
+    for (let key in clients_by_platform) {
+      if (key.match(/^[a-zA-Z0-9-_]+$/)) {
+        let count = clients_by_platform[key];
+        sub_summary.push(`${key}:${count}`);
+        metrics.set(`clients.platform.${key}`, count);
+      }
+    }
+    for (let key in clients_by_ver) {
+      if (key.match(/^[a-zA-Z0-9-_.]+$/)) {
+        let count = clients_by_ver[key];
+        sub_summary.push(`${key}:${count}`);
+        metrics.set(`clients.ver.${key.replace(/\./g, '_')}`, count);
+      }
+    }
+    lines.push(`Clients: ${num_clients}${sub_summary.length ? ` (${sub_summary.join(', ')})`: ''}`);
     let num_channels = {};
     let channels_verbose = {};
     for (let channel_id in this.local_channels) {
@@ -1123,6 +1198,7 @@ export class ChannelServer {
     let crash_dump = {
       err: inspect(e).split('\n'),
       perf_counters: perfCounterHistory(),
+      data_errors: dataErrorQueueGet(),
     };
     function addPacketLog(receiver, key) {
       if (receiver.pkt_log) {

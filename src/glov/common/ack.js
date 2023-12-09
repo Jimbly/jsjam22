@@ -4,6 +4,7 @@
 
 const assert = require('assert');
 const { isPacket } = require('./packet.js');
+const { perfCounterAddValue } = require('./perfcounters.js');
 
 export function ackInitReceiver(receiver) {
   receiver.last_pak_id = 0;
@@ -17,11 +18,12 @@ const ACKFLAG_IS_RESP = 1<<3;
 const ACKFLAG_ERR = 1<<4;
 const ACKFLAG_DATA_JSON = 1<<5;
 // `receiver` is really the sender, here, but will receive any response
-export function ackWrapPakStart(pak, receiver, msg) {
+export function ackWrapPakStart(pak, receiver, msg, msg_debug_name) {
   let flags = 0;
 
   pak.ack_data = {
     receiver,
+    msg_dbg_name: msg_debug_name || msg,
   };
 
   if (typeof msg === 'number') {
@@ -64,7 +66,9 @@ export function ackWrapPakFinish(pak, err, resp_func) {
     resp_pak_id = pak.ack_data.resp_pak_id;
     assert(resp_pak_id);
     assert(pak.ack_data.receiver);
-    pak.ack_data.receiver.resp_cbs[resp_pak_id] = resp_func;
+    assert(pak.ack_data.msg_dbg_name);
+    let ack_name = `ack.${pak.ack_data.msg_dbg_name}`;
+    pak.ack_data.receiver.resp_cbs[resp_pak_id] = { func: resp_func, ack_name };
   } else {
     pak.seek(pak.ack_data.resp_pak_id_offs);
     pak.zeroInt();
@@ -100,7 +104,7 @@ export function failAll(receiver, err) {
   receiver.resp_cbs = {};
   receiver.responses_waiting = 0;
   for (let pak_id in cbs) {
-    cbs[pak_id](err);
+    cbs[pak_id].func(err);
   }
 }
 
@@ -112,7 +116,21 @@ export function ackHandleMessage(receiver, source, pak, send_func, pak_func, han
   let pak_initial_offs = pak.getOffset();
   let { err, data, msg, pak_id } = ackReadHeader(pak);
   if (receiver.logPacketDispatch) {
-    receiver.logPacketDispatch(source, pak, pak_initial_offs, msg);
+    perfCounterAddValue('net.recv_bytes.total', pak.totalSize());
+    let msg_name;
+    if (typeof msg === 'number') {
+      let pair = receiver.resp_cbs[msg];
+      assert(!pair || pair.ack_name);
+      if (pair && pair.ack_name) {
+        msg_name = pair.ack_name;
+      } else {
+        msg_name = 'ack';
+      }
+    } else {
+      msg_name = msg;
+    }
+    perfCounterAddValue(`net.recv_bytes.${msg_name}`, pak.totalSize());
+    receiver.logPacketDispatch(source, pak, pak_initial_offs, msg_name);
   }
   let now = Date.now();
   let expecting_response = Boolean(pak_id);
@@ -186,12 +204,16 @@ export function ackHandleMessage(receiver, source, pak, send_func, pak_func, han
       return void receiver.onError(`Received response to unknown packet with id ${msg} from ${source}`);
     }
     delete receiver.resp_cbs[msg];
-    cb(err, data, respFunc);
+    profilerStart('response');
+    cb.func(err, data, respFunc);
+    profilerStop('response');
   } else {
     if (!msg) {
       return void receiver.onError(`Received message with no .msg from ${source}`);
     }
+    profilerStart(msg);
     handle_func(msg, data, respFunc);
+    profilerStop(msg);
   }
   if (expecting_response) {
     // Note, this may be -1 if respFunc has already been called

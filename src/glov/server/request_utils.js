@@ -35,12 +35,12 @@ export function ipFromRequest(req) {
 
   let raw_ip = req.client.remoteAddress || req.client.socket && req.client.socket.remoteAddress;
   let ip = raw_ip;
+  let header = req.headers['x-forwarded-for'];
   if (forward_depth) {
     // Security note: must check x-forwarded-for *only* if we know this request came from a
     //   reverse proxy, should warn if missing x-forwarded-for.
     // If forwarded through multiple proxies, want to get just the original client IP,
     //   but the configuration must specify how many trusted proxies we passed through.
-    let header = req.headers['x-forwarded-for'];
     if (!header) {
       if (!skipWarn(req)) {
         console.warn('Received request missing any x-forwarded-for header from ' +
@@ -66,6 +66,18 @@ export function ipFromRequest(req) {
       } else {
         ip = forward_ip;
       }
+    }
+  } else {
+    // No forward_depth specified, so, if we do see a x-forwarded-for header, then
+    // this is either someone spoofing, or a forwarded request (e.g. from
+    // browser-sync). Either way, do not trust it.
+    if (header) {
+      if (!skipWarn(req)) {
+        console.warn('Received request with unexpected x-forwarded-for header '+
+          `(${header}) from ${raw_ip} for ${req.url}`);
+      }
+      // use a malformed IP so that it does not pass "is local" IP checks, etc
+      ip = `untrusted:${ip}`;
     }
   }
   if (!ip) {
@@ -96,14 +108,17 @@ export function isLocalHost(ip) {
   return cached;
 }
 
-export function allowMapFromLocalhostOnly(app) {
-  app.use(function (req, res, next) {
+export function requestIsLocalHost(req) {
+  if (req.glov_is_dev === undefined) {
     let ip = ipFromRequest(req);
     req.glov_is_dev = isLocalHost(ip);
-    next();
-  });
+  }
+  return req.glov_is_dev;
+}
+
+export function allowMapFromLocalhostOnly(app) {
   app.all('*.map', function (req, res, next) {
-    if (req.glov_is_dev) {
+    if (requestIsLocalHost(req)) {
       return void next();
     }
     res.writeHead(403, { 'Content-Type': 'text/plain' });
@@ -169,8 +184,8 @@ function setCrossOriginHeadersAlways(req, res, next) {
   if (pathname.endsWith('/') || pathname.endsWith('.html') || pathname.endsWith('.js')) {
     // For developers: Set as "cross-origin isolated", for access to high resolution timers
     // Disclaimer: I have no idea what this does, other than allows high resolution timers on Chrome/Firefox
-    // res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless'); // 'require-corp');
-    // res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+    res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
   }
   next();
 }
@@ -183,12 +198,20 @@ function setCrossOriginHeadersUponRequest(req, res, next) {
   }
 }
 
+function disableCrossOriginHeadersUponRequest(req, res, next) {
+  if (!req.query.nocoop) {
+    setCrossOriginHeadersAlways(req, res, next);
+  } else {
+    next();
+  }
+}
+
 export function setupRequestHeaders(app, { dev, allow_map }) {
   if (!allow_map) {
     allowMapFromLocalhostOnly(app);
   }
   if (dev) {
-    app.use(setCrossOriginHeadersAlways);
+    app.use(disableCrossOriginHeadersUponRequest);
   } else {
     app.use(setCrossOriginHeadersUponRequest);
   }

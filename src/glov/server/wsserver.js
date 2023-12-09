@@ -1,23 +1,24 @@
 // Portions Copyright 2019 Jimb Esser (https://github.com/Jimbly/)
 // Released under MIT License: https://opensource.org/licenses/MIT
 
-/* eslint-disable import/order */
-import { VersionSupport, getVersionSupport, isValidVersion } from './version_management';
-import { isValidPlatform } from 'glov/common/enums';
-
-const ack = require('glov/common/ack.js');
-const { ackInitReceiver, ackWrapPakFinish, ackWrapPakPayload } = ack;
-const assert = require('assert');
-const events = require('glov/common/tiny-events.js');
-const { logEx } = require('./log.js');
+import assert from 'assert';
 const { max } = Math;
-const { isPacket } = require('glov/common/packet.js');
-const { packetLog, packetLogInit } = require('./packet_log.js');
-const { ipFromRequest, isLocalHost, requestGetQuery } = require('./request_utils.js');
-const util = require('glov/common/util.js');
-const wscommon = require('glov/common/wscommon.js');
-const { wsHandleMessage, wsPak, wsPakSendDest } = wscommon;
-const WebSocket = require('ws');
+import * as ack from 'glov/common/ack.js';
+const { ackInitReceiver, ackWrapPakFinish, ackWrapPakPayload } = ack;
+import { isPacket } from 'glov/common/packet';
+import { platformIsValid } from 'glov/common/platform';
+import * as events from 'glov/common/tiny-events.js';
+import * as util from 'glov/common/util.js';
+import * as wscommon from 'glov/common/wscommon.js';
+const { netDelayGet, wsHandleMessage, wsPak, wsPakSendDest } = wscommon;
+import * as WebSocket from 'ws';
+
+import { ipBanReady, ipBanned } from './ip_ban';
+import { keyMetricsAddTagged } from './key_metrics';
+import { logEx } from './log';
+import { packetLog, packetLogInit } from './packet_log';
+import { ipFromRequest, isLocalHost, requestGetQuery } from './request_utils';
+import { VersionSupport, getVersionSupport, isValidVersion } from './version_management';
 
 function WSClient(ws_server, socket) {
   events.EventEmitter.call(this);
@@ -35,6 +36,11 @@ function WSClient(ws_server, socket) {
   this.client_plat = query.plat;
   this.client_ver = query.ver;
   this.client_build = query.build;
+  // Note: client_tags only has client-scoped ABTest tags, not user-scoped (UserWorker gets those in rich presence)
+  this.client_tags = query.abt ? query.abt.split(',') : [];
+  if (this.client_plat) {
+    this.client_tags.push(this.client_plat);
+  }
   this.handlers = ws_server.handlers; // reference, not copy!
   this.connected = true;
   this.disconnected = false;
@@ -86,8 +92,8 @@ WSClient.prototype.onClose = function () {
 
 WSClient.prototype.send = wscommon.sendMessage;
 
-WSClient.prototype.pak = function (msg, ref_pak) {
-  return wsPak(msg, ref_pak, this);
+WSClient.prototype.pak = function (msg, ref_pak, msg_debug_name) {
+  return wsPak(msg, ref_pak, this, msg_debug_name);
 };
 
 function WSServer() {
@@ -98,7 +104,7 @@ function WSServer() {
   this.clients = Object.create(null);
   this.handlers = {};
   this.restarting = undefined;
-  this.app_build_timestamp = 0;
+  this.app_build_timestamp = { app: 0 };
   this.restart_filter = null;
   this.onMsg('ping', util.nop);
   packetLogInit(this);
@@ -138,16 +144,29 @@ function logBigFilter(client, msg, data) {
   return true; // always accept
 }
 
-WSServer.prototype.init = function (server, server_https, no_timeout) {
+WSServer.prototype.init = function (server, server_https, no_timeout, dev) {
   let ws_server = this;
   ws_server.wss = new WebSocket.Server({ noServer: true, maxPayload: 1024*1024 });
 
   // Doing my own upgrade handling to early-reject invalid protocol versions
   let onUpgrade = (req, socket, head) => {
+    if (ipBanReady()) {
+      let addr = ipFromRequest(req);
+      if (ipBanned(addr)) {
+        logEx({
+          ip: addr,
+        }, 'info', `WS Client rejected (ip banned) from ${addr}: ${req.url}`);
+        socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+        socket.end();
+        socket.destroy();
+        return;
+      }
+    }
+
     let query = requestGetQuery(req);
     let plat = query.plat ?? null;
     let ver = query.ver ?? null;
-    let versionSupport = plat !== null && ver !== null && isValidPlatform(plat) && isValidVersion(ver) ?
+    let versionSupport = plat !== null && ver !== null && platformIsValid(plat) && isValidVersion(ver) ?
       getVersionSupport(plat, ver) :
       VersionSupport.Obsolete;
     if (versionSupport !== VersionSupport.Supported) {
@@ -228,17 +247,23 @@ WSServer.prototype.init = function (server, server_https, no_timeout) {
       build: client.client_build,
     });
 
+    keyMetricsAddTagged('wsconnect', client.client_tags, 1);
+
+    let query = requestGetQuery(req);
+    let client_app = query.app || 'app';
     let cack_data = {
       id: client.client_id,
       secret: client.secret,
-      build: this.app_build_timestamp,
+      build: this.app_build_timestamp[client_app],
       restarting: ws_server.restarting,
     };
+    if (dev) {
+      cack_data.net_delay = netDelayGet();
+    }
     ws_server.emit('cack_data', cack_data, client);
 
     client.send('cack', cack_data);
 
-    let query = requestGetQuery(req);
     let reconnect_id = Number(query.reconnect);
     if (reconnect_id) {
       // we're reconnecting an existing client, immediately disconnect the old one
@@ -291,6 +316,17 @@ WSServer.prototype.close = function () {
   }
 };
 
+WSServer.prototype.checkAllIPBans = function () {
+  assert(ipBanReady());
+  for (let client_id in this.clients) {
+    let client = this.clients[client_id];
+    if (ipBanned(client.addr)) {
+      client.log('IP is now banned, disconnecting...');
+      this.disconnectClient(client);
+    }
+  }
+};
+
 // Must be a ready-to-send packet created with .pak, not just the payload
 WSServer.prototype.broadcastPacket = function (pak) {
   let ws_server = this;
@@ -316,8 +352,9 @@ WSServer.prototype.broadcast = function (msg, data) {
   return this.broadcastPacket(pak);
 };
 
-WSServer.prototype.setAppBuildTimestamp = function (ver) {
-  this.app_build_timestamp = ver;
+WSServer.prototype.setAppBuildTimestamp = function (app, ver) {
+  assert(ver);
+  this.app_build_timestamp[app] = ver;
 };
 
 export function isClient(obj) {

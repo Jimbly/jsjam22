@@ -1,38 +1,50 @@
 // Portions Copyright 2020 Jimb Esser (https://github.com/Jimbly/)
 // Released under MIT License: https://opensource.org/licenses/MIT
-/* eslint-disable import/order */
-const assert = require('assert');
-const { asyncParallel } = require('glov-async');
-const camera2d = require('./camera2d.js');
-const { cmd_parse } = require('./cmds.js');
-const engine = require('./engine.js');
-const glov_font = require('./font.js');
-const { isFriend } = require('./social.js');
-const input = require('./input.js');
-const { link } = require('./link.js');
-const local_storage = require('./local_storage.js');
-const { getStringIfLocalizable } = require('./localization.js');
-const { ceil, floor, max, min, round } = Math;
-const { netClient, netClientId, netSubs, netUserId } = require('./net.js');
-const { profanityFilter, profanityStartup } = require('./words/profanity.js');
-const { scrollAreaCreate } = require('./scroll_area.js');
-const settings = require('./settings.js');
-const { spotUnfocus } = require('./spot.js');
-const ui = require('./ui.js');
-const { clamp, matchAll } = require('glov/common/util.js');
-const { vec4, v3copy } = require('glov/common/vmath.js');
 
-const FLAG_EMOTE = 1;
-const FLAG_USERCHAT = 2;
+import assert from 'assert';
+import { asyncParallel } from 'glov-async';
+import { clamp, defaults, deprecate, matchAll } from 'glov/common/util';
+import { v3copy, vec4 } from 'glov/common/vmath';
+import * as camera2d from './camera2d';
+import { getAbilityChat } from './client_config';
+import { cmd_parse } from './cmds';
+import * as engine from './engine';
+import * as glov_font from './font';
+import { ALIGN } from './font';
+import * as input from './input';
+import { link } from './link';
+import * as local_storage from './local_storage';
+import { getStringIfLocalizable } from './localization';
+import { netClient, netClientId, netSubs, netUserId } from './net';
+import { scrollAreaCreate } from './scroll_area';
+import * as settings from './settings';
+import { isFriend } from './social';
+import { spotUnfocus } from './spot';
+import * as ui from './ui';
+import { uiTextHeight } from './ui';
+import { uiStyleCurrent } from './uistyle';
+import { profanityFilter, profanityStartup } from './words/profanity';
+
+const { ceil, floor, max, min, round } = Math;
+
+deprecate(exports, 'create', 'chatUICreate');
+
+export const CHAT_FLAG_EMOTE = 1;
+export const CHAT_FLAG_USERCHAT = 2;
 
 Z.CHAT = Z.CHAT || 500;
 Z.CHAT_FOCUSED = Z.CHAT_FOCUSED || Z.CHAT;
 
-const color_user_rollover = vec4(1,1,1,0.5);
+const color_user_rollover = vec4(1, 1, 1, 0.5);
+const color_same_user_rollover = vec4(1, 1, 1, 0.25);
 
 const MAX_PER_STYLE = {
   join_leave: 3,
 };
+
+function messageFromUser(msg) {
+  return msg.style !== 'error' && msg.style !== 'system';
+}
 
 settings.register({
   chat_auto_unfocus: {
@@ -139,11 +151,11 @@ CmdHistory.prototype.next = function (cur_text) {
 
 function defaultGetRoles() {
   let user_public_data;
-  if (netUserId() && netClient().connected) {
+  if (netSubs() && netUserId() && netClient().connected) {
     let user_channel = netSubs().getMyUserChannel();
     user_public_data = user_channel.data && user_channel.data.public;
     if (user_public_data?.permissions?.sysadmin) {
-      return { sysadmin: 1 };
+      return { sysadmin: 1, csr: 1 };
     }
   }
   return {};
@@ -159,8 +171,11 @@ function ChatUI(params) {
     spatial_focus: false,
     max_len: params.max_len,
     text: '',
+    suppress_up_down: true,
   });
   this.channel = null;
+
+  let style = params.style || uiStyleCurrent();
 
   this.on_join = this.onMsgJoin.bind(this);
   this.on_leave = this.onMsgLeave.bind(this);
@@ -173,8 +188,9 @@ function ChatUI(params) {
   this.max_lines = params.max_lines || 8; // Max shown when chat not active
   this.max_messages = params.max_messages || 1000; // Size of history kept
   this.max_len = params.max_len;
-  this.font_height = params.font_height || ui.font_height;
+  this.font_height = params.font_height || style.text_height;
   this.hide_disconnected_message = params.hide_disconnected_message || false;
+  this.disconnected_message_top = params.disconnected_message_top || false;
   this.scroll_area = scrollAreaCreate({
     background_color: null,
     auto_scroll: true,
@@ -192,21 +208,17 @@ function ChatUI(params) {
   this.url_match = params.url_match; // runs `/url match[1]` if clicked
   this.url_info = params.url_info; // Optional for grabbing the interesting portion of the URL for tooltip and /url
   this.user_context_cb = params.user_context_cb; // Cb called with { user_id } on click
+  this.user_id_mouseover = false;
 
   this.fade_start_time = params.fade_start_time || [10000, 1000];
   this.fade_time = params.fade_time || [1000, 500];
+  this.z_override = null; // 1-frame Z override
 
   this.setActiveSize(this.font_height, this.w);
   let outline_width = params.outline_width || 1;
-
-  this.styles = {
+  this.styles = defaults(params.styles || {}, {
     def: glov_font.style(null, {
       color: 0xEEEEEEff,
-      outline_width,
-      outline_color: 0x000000ff,
-    }),
-    system: glov_font.style(null, {
-      color: 0xAAAAAAff,
       outline_width,
       outline_color: 0x000000ff,
     }),
@@ -225,10 +237,21 @@ function ChatUI(params) {
       outline_width,
       outline_color: 0x000000ff,
     }),
-  };
+    system: glov_font.style(null, {
+      color: 0xAAAAAAff,
+      outline_width,
+      outline_color: 0x000000ff,
+    }),
+  });
   this.styles.join_leave = this.styles.system;
+  this.classifyRole = params.classifyRole;
 
-  netSubs().on('chat_broadcast', this.onChatBroadcast.bind(this));
+  if (netSubs()) {
+    netSubs().on('chat_broadcast', this.onChatBroadcast.bind(this));
+  }
+
+  // for console debugging, overrides general (not forwarded to server, not access checked) version
+  window.cmd = this.cmdParse.bind(this);
 }
 
 ChatUI.prototype.setActiveSize = function (font_height, w) {
@@ -241,7 +264,7 @@ ChatUI.prototype.setActiveSize = function (font_height, w) {
     this.total_lines = 0;
     for (let ii = 0; ii < this.msgs.length; ++ii) {
       let elem = this.msgs[ii];
-      elem.numlines = ui.font.numLines(this.styles[elem.style] || this.styles.def,
+      elem.numlines = ui.font.numLines((this.styles[elem.style] || this.styles.def),
         this.wrap_w, this.indent, this.active_font_height, elem.msg_text);
       this.total_lines += elem.numlines;
     }
@@ -259,8 +282,8 @@ function notHidden(msg) {
 
 ChatUI.prototype.addMsgInternal = function (elem) {
   elem.timestamp = elem.timestamp || Date.now();
-  if (elem.flags & FLAG_USERCHAT) {
-    if (elem.flags & FLAG_EMOTE) {
+  if (elem.flags & CHAT_FLAG_USERCHAT) {
+    if (elem.flags & CHAT_FLAG_EMOTE) {
       elem.msg_text = `${elem.display_name} ${elem.msg}`;
     } else {
       elem.msg_text = `[${elem.display_name}] ${elem.msg}`;
@@ -268,7 +291,7 @@ ChatUI.prototype.addMsgInternal = function (elem) {
   } else {
     elem.msg_text = elem.msg;
   }
-  elem.numlines = ui.font.numLines(this.styles[elem.style] || this.styles.def,
+  elem.numlines = ui.font.numLines((this.styles[elem.style] || this.styles.def),
     this.wrap_w, this.indent, this.active_font_height, elem.msg_text);
   this.total_lines += elem.numlines;
   this.msgs.push(elem);
@@ -336,7 +359,7 @@ ChatUI.prototype.onMsgJoin = function (data) {
     this.addChatFiltered({
       id: data.user_id || data.client_id,
       display_name: data.display_name || data.client_id,
-      flags: FLAG_EMOTE|FLAG_USERCHAT,
+      flags: CHAT_FLAG_EMOTE|CHAT_FLAG_USERCHAT,
       msg: 'joined the channel',
       style: 'join_leave',
     });
@@ -352,7 +375,7 @@ ChatUI.prototype.onMsgLeave = function (data) {
   this.addChatFiltered({
     id: data.user_id || data.client_id,
     display_name: data.display_name || data.client_id,
-    flags: FLAG_EMOTE|FLAG_USERCHAT,
+    flags: CHAT_FLAG_EMOTE|CHAT_FLAG_USERCHAT,
     msg: 'left the channel',
     style: 'join_leave',
   });
@@ -367,18 +390,19 @@ ChatUI.prototype.onMsgChat = function (data) {
   if (this.on_chat_cb) {
     this.on_chat_cb(data);
   }
-  let { msg, id, client_id, display_name, flags, ts, quiet } = data;
+  let { msg, style, id, client_id, display_name, flags, ts, quiet } = data;
   if (!quiet && client_id !== netClientId()) {
     if (this.volume_in) {
       ui.playUISound('msg_in', this.volume_in);
     }
   }
   display_name = display_name || id;
-  flags = (flags || 0) | FLAG_USERCHAT;
+  flags = (flags || 0) | CHAT_FLAG_USERCHAT;
   this.addChatFiltered({
     id,
     display_name,
     msg,
+    style,
     flags,
     timestamp: ts,
     quiet,
@@ -393,15 +417,19 @@ ChatUI.prototype.onChatBroadcast = function (data) {
   });
 };
 
+ChatUI.prototype.focus = function () {
+  this.edit_text_entry.focus();
+};
+
 ChatUI.prototype.runLate = function () {
   this.did_run_late = true;
-  if (input.keyDownEdge(input.KEYS.RETURN)) {
-    this.edit_text_entry.focus();
+  if (getAbilityChat() && input.keyDownEdge(input.KEYS.RETURN)) {
+    this.focus();
   }
   if (input.keyDownEdge(input.KEYS.SLASH) ||
     input.keyDownEdge(input.KEYS.NUMPAD_DIVIDE)
   ) {
-    this.edit_text_entry.focus();
+    this.focus();
     this.edit_text_entry.setText('/');
   }
 };
@@ -439,7 +467,7 @@ ChatUI.prototype.cmdParse = function (str, cb) {
     (err, resp) => {
       this.handle_cmd_parse(err, resp);
       if (cb) {
-        cb(err);
+        cb(err, resp);
       }
     } :
     this.handle_cmd_parse;
@@ -480,7 +508,7 @@ function drawHelpTooltip(param) {
   let tooltip = param.tooltip;
   let num_pages = 1;
   let h = param.font_height;
-  let eff_tooltip_pad = ui.tooltip_pad * 0.5;
+  let eff_tooltip_pad = floor(ui.tooltip_pad * 0.5);
   let num_per_page = min(TOOLTIP_MIN_PAGE_SIZE, max(1, floor((param.y - camera2d.y0() - eff_tooltip_pad) / h) - 1));
   if (tooltip.length > 20) {
     let text = tooltip.join('\n');
@@ -521,7 +549,7 @@ function drawHelpTooltip(param) {
   if (num_pages > 1) {
     y -= h;
     ui.font.drawSizedAligned(help_font_style,
-      text_x, y, z+1, h, glov_font.ALIGN.HCENTER,
+      text_x, y, z+1, h, ALIGN.HCENTER,
       text_w, 0,
       `Page ${tooltip_page + 1} / ${num_pages}`);
     let pos = { x, y, w, h };
@@ -533,7 +561,11 @@ function drawHelpTooltip(param) {
   }
   for (let ii = tooltip.length - 1; ii >= 0; --ii) {
     let line = tooltip[ii];
-    y -= h;
+    if (param.wrap) {
+      y -= h * ui.font.numLines(style, text_w, 0, h, line);
+    } else {
+      y -= h;
+    }
     let idx = line.indexOf(' ');
     if (line[0] === '/' && idx !== -1 && param.do_selection) {
       // is a command
@@ -542,7 +574,7 @@ function drawHelpTooltip(param) {
       let cmd_w = ui.font.drawSized(help_font_style_cmd,
         text_x, y, z+1, h, cmd);
       ui.font.drawSizedAligned(help_font_style,
-        text_x + cmd_w, y, z+2, h, glov_font.ALIGN.HFIT,
+        text_x + cmd_w, y, z+2, h, ALIGN.HFIT,
         text_w - cmd_w, 0,
         help);
       let pos = { x, y, w, h };
@@ -554,7 +586,7 @@ function drawHelpTooltip(param) {
       }
     } else {
       ui.font.drawSizedAligned(style,
-        text_x, y, z+1, h, glov_font.ALIGN.HFIT,
+        text_x, y, z+1, h, param.wrap ? ALIGN.HWRAP : ALIGN.HFIT,
         text_w, 0,
         line);
     }
@@ -578,9 +610,11 @@ ChatUI.prototype.isFocused = function () {
 };
 
 ChatUI.prototype.sendChat = function (flags, text) {
-  if (!netClient().connected) {
+  if (!netClient() || !netClient().connected) {
     this.addChatError('Cannot chat: Disconnected');
-  } else if (!this.channel || !netSubs().loggedIn() && !netSubs().allow_anon) {
+  } else if (!this.channel) {
+    this.addChatError('Cannot chat: Must be in a channel');
+  } else if (!netSubs().loggedIn() && !netSubs().allow_anon) {
     this.addChatError('Cannot chat: Must be logged in');
   } else if (text.length > this.max_len) {
     this.addChatError('Chat message too long');
@@ -591,11 +625,14 @@ ChatUI.prototype.sendChat = function (flags, text) {
     pak.send((err, data) => {
       if (err) {
         if (err === 'ERR_ECHO') {
+          let roles = this.channel?.data?.public?.clients[netClientId()]?.ids?.roles;
+          let style = this.classifyRole && this.classifyRole(roles, true);
           this.onMsgChat({
             msg: text,
+            style: style,
             id: netUserId(),
             client_id: netClientId(),
-            display_name: netSubs().logged_in_display_name,
+            display_name: netSubs().getDisplayName(),
             flags,
           });
         } else {
@@ -609,21 +646,32 @@ ChatUI.prototype.sendChat = function (flags, text) {
   }
 };
 
+ChatUI.prototype.setZOverride = function (z) {
+  this.z_override = z;
+};
+
 ChatUI.prototype.run = function (opts) {
-  const UI_SCALE = ui.font_height / 24;
+  const UI_SCALE = uiTextHeight() / 24;
   opts = opts || {};
+  if (!getAbilityChat()) {
+    opts.hide = true;
+  }
   const border = opts.border || this.border || (8 * UI_SCALE);
   const SPACE_ABOVE_ENTRY = border;
   const scroll_grow = opts.scroll_grow || 0;
-  if (netClient().disconnected && !this.hide_disconnected_message) {
+  if (netClient() && netClient().disconnected && !this.hide_disconnected_message) {
     ui.font.drawSizedAligned(
       glov_font.style(null, {
         outline_width: 2,
         outline_color: 0x000000ff,
         color: 0xDD2020ff
       }),
-      camera2d.x0(), camera2d.y0(), Z.DEBUG,
-      ui.font_height, glov_font.ALIGN.HVCENTER, camera2d.w(), camera2d.h() * 0.20,
+      camera2d.x0(),
+      this.disconnected_message_top ? engine.game_height * 0.80 : camera2d.y0(),
+      Z.DEBUG,
+      uiTextHeight(),
+      this.disconnected_message_top ? ALIGN.HCENTER : ALIGN.HVCENTER,
+      camera2d.w(), camera2d.h() * 0.20,
       `Connection lost, attempting to reconnect (${(netClient().timeSinceDisconnect()/1000).toFixed(0)})...`);
   }
 
@@ -647,7 +695,8 @@ ChatUI.prototype.run = function (opts) {
   let y = y1;
   let outer_w = this.w;
   let was_focused = this.isFocused();
-  let z = was_focused ? Z.CHAT_FOCUSED : Z.CHAT;
+  let z = this.z_override || (was_focused ? Z.CHAT_FOCUSED : Z.CHAT);
+  this.z_override = null;
   let is_focused = false;
   let font_height = this.font_height;
   let anything_visible = false;
@@ -673,7 +722,7 @@ ChatUI.prototype.run = function (opts) {
     y -= border + font_height + 1;
     if (!was_focused && opts.pointerlock && input.pointerLocked()) {
       // do not show edit box
-      ui.font.drawSizedAligned(this.styles.def, x, y, z + 1, font_height, glov_font.ALIGN.HFIT, inner_w, 0,
+      ui.font.drawSizedAligned(this.styles.def, x, y, z + 1, font_height, ALIGN.HFIT, inner_w, 0,
         '<Press Enter to chat>');
     } else {
       if (was_focused) {
@@ -681,7 +730,7 @@ ChatUI.prototype.run = function (opts) {
         // Eat tab even if there's nothing to complete, for consistency
         let pressed_tab = !input.keyDown(input.KEYS.SHIFT) && input.keyDownEdge(input.KEYS.TAB);
         if (pressed_tab) {
-          this.edit_text_entry.focus();
+          this.focus();
         }
         let cur_text = this.edit_text_entry.getText();
         if (cur_text) {
@@ -691,6 +740,7 @@ ChatUI.prototype.run = function (opts) {
             if (autocomplete && autocomplete.length) {
               let first = autocomplete[0];
               let auto_text = [];
+              let wrap = false;
               for (let ii = 0; ii < autocomplete.length; ++ii) {
                 let elem = autocomplete[ii];
                 auto_text.push(`/${elem.cmd} - ${elem.help}`);
@@ -706,6 +756,7 @@ ChatUI.prototype.run = function (opts) {
                 } else {
                   auto_text = [first.help];
                 }
+                wrap = true;
               } else {
                 do_selection = true;
               }
@@ -714,7 +765,7 @@ ChatUI.prototype.run = function (opts) {
               let last_msg = this.msgs[this.msgs.length - 1];
               if (last_msg) {
                 let msg = last_msg.msg;
-                if (msg && !(last_msg.flags & FLAG_USERCHAT) && msg.slice(0, 7) === '[error]') {
+                if (msg && !(last_msg.flags & CHAT_FLAG_USERCHAT) && msg.slice(0, 7) === '[error]') {
                   let numlines = last_msg.numlines;
                   tooltip_y -= font_height * numlines + SPACE_ABOVE_ENTRY;
                 }
@@ -726,6 +777,7 @@ ChatUI.prototype.run = function (opts) {
                 tooltip: auto_text,
                 do_selection,
                 font_height: min(font_height, camera2d.w() / 30),
+                wrap,
               });
               if (do_selection) {
                 // auto-completes to something different than we have typed
@@ -787,7 +839,7 @@ ChatUI.prototype.run = function (opts) {
                 this.edit_text_entry.setText(text);
               }
               if (!is_focused) { // was auto-unfocused
-                this.edit_text_entry.focus();
+                this.focus();
               }
             });
           } else {
@@ -814,6 +866,7 @@ ChatUI.prototype.run = function (opts) {
   let do_scroll_area = is_focused || opts.always_scroll;
   let bracket_width = 0;
   let name_width = {};
+  let did_user_mouseover = false;
   // Slightly hacky: uses `x` and `y` from the higher scope
   function drawChatLine(msg, alpha) {
     if (msg.hidden) {
@@ -831,7 +884,7 @@ ChatUI.prototype.run = function (opts) {
       }
     }
     let h = font_height * numlines;
-    let do_mouseover = do_scroll_area && !input.mousePosIsTouch() && (!msg.style || msg.style === 'def' || is_url);
+    let do_mouseover = do_scroll_area && !input.mousePosIsTouch() && (!msg.style || messageFromUser(msg) || is_url);
     let text_w;
     let mouseover = false;
     if (do_mouseover) {
@@ -842,12 +895,12 @@ ChatUI.prototype.run = function (opts) {
     let user_mouseover = false;
     let user_indent = 0;
     let did_user_context = false;
-    if ((msg.flags & FLAG_USERCHAT) && user_context_cb && msg.id && do_scroll_area) {
+    if ((msg.flags & CHAT_FLAG_USERCHAT) && user_context_cb && msg.id && do_scroll_area) {
       let nw = name_width[msg.display_name];
       if (!nw) {
         nw = name_width[msg.display_name] = ui.font.getStringWidth(styles.def, font_height, msg.display_name);
       }
-      if (!(msg.flags & FLAG_EMOTE)) {
+      if (!(msg.flags & CHAT_FLAG_EMOTE)) {
         if (!bracket_width) {
           bracket_width = ui.font.getStringWidth(styles.def, font_height, '[]');
         }
@@ -868,8 +921,16 @@ ChatUI.prototype.run = function (opts) {
         });
       } else {
         user_mouseover = input.mouseOver(pos_param);
+        if (self.user_id_mouseover === msg.id) {
+          ui.drawRect2({
+            ...pos_param,
+            color: color_same_user_rollover,
+          });
+        }
         if (user_mouseover) {
           ui.drawRect2(pos_param);
+          did_user_mouseover = true;
+          self.user_id_mouseover = msg.id;
         }
       }
     }
@@ -878,14 +939,19 @@ ChatUI.prototype.run = function (opts) {
       click = link({ x: x + user_indent, y, w: wrap_w - user_indent, h, url: is_url, internal: true });
     }
 
-    let style = styles[msg.style || (is_url ? mouseover && !user_mouseover ? 'link_hover' : 'link' : 'def')];
+    let style;
+    if (is_url) {
+      style = mouseover && !user_mouseover ? styles.link_hover : styles.link;
+    } else {
+      style = styles[msg.style] || styles.def;
+    }
 
     // Draw the actual text
     ui.font.drawSizedWrapped(glov_font.styleAlpha(style, alpha), x, y, z + 1, wrap_w, self.indent, font_height, line);
 
     if (mouseover && (!do_scroll_area || y > self.scroll_area.getScrollPos() - font_height) &&
       // Only show tooltip for user messages or links
-      (!msg.style || msg.style === 'def' || is_url)
+      (!msg.style || messageFromUser(msg) || is_url)
     ) {
       ui.drawTooltip({
         x, y, z: Z.TOOLTIP,
@@ -901,12 +967,13 @@ ChatUI.prototype.run = function (opts) {
       });
     }
     // Previously: mouseDownEdge because by the time the Up happens, the chat text might not be here anymore
+    let longpress = input.longPress({ x, y, w: wrap_w, h });
     click = click || input.click({ x, y, w: wrap_w, h });
     if (did_user_context) {
       click = null;
     }
-    if (click) {
-      if (click.button === 2) {
+    if (click || longpress) {
+      if (longpress || click.button === 2) {
         ui.provideUserString('Chat Text', is_url || line);
       } else if (is_url) {
         self.cmdParseInternal(`url ${url_label}`);
@@ -967,7 +1034,7 @@ ChatUI.prototype.run = function (opts) {
     // Also prevent mouseover from going to anything beneat it
     input.mouseOver({ x: x0, y: y - border, w: outer_w, h: y1 - y + border });
     // Also a mouse down anywhere outside of the chat UI should dismiss it
-    if (input.mouseDownEdge({ peek: true })) {
+    if (is_focused && input.mouseDownEdge({ peek: true })) {
       // On touch, tapping doesn't always remove focus from the edit box!
       // Maybe this logic should be in the editbox logic?
       spotUnfocus();
@@ -994,6 +1061,10 @@ ChatUI.prototype.run = function (opts) {
     }
   }
 
+  if (!did_user_mouseover) {
+    self.user_id_mouseover = false;
+  }
+
   if (opts.pointerlock && is_focused && input.pointerLocked()) {
     // Gained focus undo pointerlock
     input.pointerLockExit();
@@ -1002,7 +1073,7 @@ ChatUI.prototype.run = function (opts) {
   if (!anything_visible && (ui.modal_dialog || ui.menu_up || hide_light)) {
     return;
   }
-  ui.drawRect(x0, y - border, x0 + outer_w, y1, z, [0.3,0.3,0.3,0.75]);
+  ui.drawRect(x0, y - border, x0 + outer_w, y1, z, [0.3,0.3,0.3,0.8]);
 };
 
 ChatUI.prototype.setChannel = function (channel) {
@@ -1120,7 +1191,7 @@ ChatUI.prototype.setChannel = function (channel) {
   });
 };
 
-export function create(params) {
+export function chatUICreate(params) {
   profanityStartup();
   let chat_ui = new ChatUI(params);
   function emote(str, resp_func) {
@@ -1132,7 +1203,7 @@ export function create(params) {
       params.emote_cb(str);
     }
 
-    chat_ui.sendChat(FLAG_EMOTE, str);
+    chat_ui.sendChat(CHAT_FLAG_EMOTE, str);
   }
   cmd_parse.registerValue('volume_chat_joinleave', {
     type: cmd_parse.TYPE_FLOAT,
@@ -1160,8 +1231,10 @@ export function create(params) {
   });
   cmd_parse.register({
     cmd: 'me',
-    help: 'Emote',
-    usage: '$HELP\n  Example: /me jumps up and down!',
+    help: 'Sends a message emoting an action. Can also perform animated emotes.',
+    usage: '$HELP\n  Example: /me jumps up and down!\n' +
+    '    /me waves\n' +
+    '    /me sits',
     func: emote,
   });
   // Also alias /em
@@ -1178,5 +1251,67 @@ export function create(params) {
       resp_func();
     },
   });
+  cmd_parse.register({
+    cmd: 'csr_all',
+    access_run: ['sysadmin'],
+    help: '(Admin) Run a command as all users in the current channel',
+    prefix_usage_with_help: true,
+    usage: '  /csr_all command\n' +
+      'Example: /csr_all me bows down',
+    func: function (str, resp_func) {
+      if (!(chat_ui.channel && chat_ui.channel.numSubscriptions())) {
+        return void resp_func('Must be in a channel');
+      }
+      let clients = chat_ui.channel.getChannelData('public.clients', {});
+      let count = 0;
+      for (let client_id in clients) {
+        let ids = clients[client_id].ids;
+        if (ids?.user_id) {
+          let cmd = str;
+          let pak = netSubs().getChannelImmediate(`user.${ids.user_id}`).pak('csr_admin_to_user');
+          pak.writeJSON(cmd_parse.last_access);
+          pak.writeString(cmd);
+          pak.writeAnsiString(client_id);
+          pak.send(chat_ui.handle_cmd_parse);
+          ++count;
+        }
+      }
+      resp_func(null, `Sent command to ${count} user(s)`);
+    }
+  });
+  cmd_parse.register({
+    cmd: 'csr',
+    access_run: ['csr'],
+    help: '(CSR) Run a command as another user',
+    prefix_usage_with_help: true,
+    usage: '  /csr UserID command\n' +
+      'Example: /csr jimbly gems -100',
+    func: function (str, resp_func) {
+      let idx = str.indexOf(' ');
+      if (idx === -1) {
+        return void resp_func('Invalid number of arguments');
+      }
+      let user_id = str.slice(0, idx);
+      let desired_client_id = '';
+      if (chat_ui.channel && chat_ui.channel.numSubscriptions()) {
+        let clients = chat_ui.channel.getChannelData('public.clients', {});
+        for (let client_id in clients) {
+          let ids = clients[client_id].ids;
+          if (ids?.user_id === user_id) {
+            desired_client_id = client_id;
+          }
+        }
+      }
+
+      let cmd = str.slice(idx + 1);
+      let pak = netSubs().getChannelImmediate(`user.${user_id}`).pak('csr_admin_to_user');
+      pak.writeJSON(cmd_parse.last_access);
+      pak.writeString(cmd);
+      pak.writeAnsiString(desired_client_id);
+      pak.send(resp_func);
+    }
+  });
+
+
   return chat_ui;
 }

@@ -2,7 +2,7 @@
 // Released under MIT License: https://opensource.org/licenses/MIT
 /* eslint complexity:off */
 
-// eslint-disable-next-line no-use-before-define
+// eslint-disable-next-line @typescript-eslint/no-use-before-define
 exports.create = selectionBoxCreate;
 
 import * as assert from 'assert';
@@ -41,8 +41,18 @@ import {
   spotSubPop,
   spotSubPush,
 } from './spot.js';
-import { clipPause, clipResume, clipped } from './sprites.js';
-import { playUISound } from './ui.js';
+import { spriteClipPause, spriteClipResume, spriteClipped } from './sprites.js';
+import {
+  drawHBox,
+  getUIElemData,
+  playUISound,
+  uiButtonHeight,
+  uiButtonWidth,
+  uiFontStyleFocused,
+  uiFontStyleNormal,
+  uiGetFont,
+  uiTextHeight,
+} from './ui.js';
 import * as glov_ui from './ui.js';
 
 let glov_markup = null; // Not ported
@@ -79,12 +89,12 @@ export function selboxDefaultDrawItemBackground({
   image_set, color,
   image_set_extra, image_set_extra_alpha,
 }) {
-  glov_ui.drawHBox({ x, y, z, w, h },
+  drawHBox({ x, y, z, w, h },
     image_set, color);
   if (image_set_extra && image_set_extra_alpha) {
     v4copy(color_temp_fade, color);
     color_temp_fade[3] *= easeIn(image_set_extra_alpha, 2);
-    glov_ui.drawHBox({ x, y, z: z + 0.001, w, h },
+    drawHBox({ x, y, z: z + 0.001, w, h },
       image_set_extra, color_temp_fade);
   }
 }
@@ -242,13 +252,13 @@ class SelectionBoxBase {
     this.x = 0;
     this.y = 0;
     this.z = Z.UI;
-    this.width = glov_ui.button_width;
+    this.width = uiButtonWidth();
     this.items = [];
     this.disabled = false;
     this.display = cloneShallow(default_display);
     this.scroll_height = 0;
-    this.font_height = glov_ui.font_height;
-    this.entry_height = glov_ui.button_height;
+    this.font_height = uiTextHeight();
+    this.entry_height = uiButtonHeight();
     this.auto_reset = true;
     this.reset_selection = false;
     this.initial_selection = 0;
@@ -286,6 +296,14 @@ class SelectionBoxBase {
     }
   }
 
+  wasClicked() {
+    return this.was_clicked;
+  }
+
+  wasRightClicked() {
+    return this.was_right_clicked;
+  }
+
   isSelected(tag_or_index) {
     if (typeof tag_or_index === 'number') {
       return this.selected === tag_or_index;
@@ -295,6 +313,27 @@ class SelectionBoxBase {
 
   getSelected() {
     return this.items[this.selected];
+  }
+
+  findIndex(tag_or_index) {
+    if (typeof tag_or_index === 'number') {
+      assert(tag_or_index < this.items.length);
+      return tag_or_index;
+    } else {
+      for (let ii = 0; ii < this.items.length; ++ii) {
+        if (this.items[ii].tag === tag_or_index) {
+          return ii;
+        }
+      }
+    }
+    return -1;
+  }
+
+  setSelected(tag_or_index) {
+    let idx = this.findIndex(tag_or_index);
+    if (idx !== -1) {
+      this.selected = idx;
+    }
   }
 
   handleInitialSelection() {
@@ -654,6 +693,10 @@ class GlovSelectionBox extends SelectionBoxBase {
     // nothing
   }
 
+  isDropdownVisible() {
+    return false;
+  }
+
   run(params) {
     this.applyParams(params);
     let { x, y, z, entry_height, ctx } = this;
@@ -694,6 +737,10 @@ class GlovDropDown extends SelectionBoxBase {
     // Run-time state
     this.dropdown_visible = false;
     this.last_selected = undefined;
+  }
+
+  isDropdownVisible() {
+    return this.dropdown_visible;
   }
 
   focus() {
@@ -780,13 +827,13 @@ class GlovDropDown extends SelectionBoxBase {
         }
       }
     }
-    glov_ui.drawHBox({
+    drawHBox({
       x, y, z: z + 1,
       w: width, h: entry_height
     }, glov_ui.sprites.menu_header, COLORS[root_spot_ret.spot_state]);
     let align = (display.centered ? glov_font.ALIGN.HCENTER : glov_font.ALIGN.HLEFT) |
       glov_font.ALIGN.HFIT | glov_font.ALIGN.VCENTER;
-    font.drawSizedAligned(root_spot_ret.focused ? glov_ui.font_style_focused : glov_ui.font_style_normal,
+    font.drawSizedAligned(root_spot_ret.focused ? uiFontStyleFocused() : uiFontStyleNormal(),
       x + display.xpad, y, z + 2,
       font_height, align,
       width - display.xpad - glov_ui.sprites.menu_header.uidata.wh[2] * entry_height, entry_height,
@@ -796,9 +843,9 @@ class GlovDropDown extends SelectionBoxBase {
 
     if (this.dropdown_visible) {
       z += 1000; // drop-down part should be above everything except tooltips
-      let clip_pause = clipped();
+      let clip_pause = spriteClipped();
       if (clip_pause) {
-        clipPause();
+        spriteClipPause();
       }
       spotSubPush();
       let do_scroll = scroll_height && this.items.length * entry_height > scroll_height;
@@ -813,7 +860,7 @@ class GlovDropDown extends SelectionBoxBase {
       }
       spotSubPop();
       if (clip_pause) {
-        clipResume();
+        spriteClipResume();
       }
 
       let { any_focused, scroll_area_consumed_click } = ctx;
@@ -852,14 +899,44 @@ GlovDropDown.prototype.nav_loop = true;
 
 export function selectionBoxCreate(params) {
   if (!font) {
-    font = glov_ui.font;
+    font = uiGetFont();
   }
   return new GlovSelectionBox(params);
 }
 
 export function dropDownCreate(params) {
   if (!font) {
-    font = glov_ui.font;
+    font = uiGetFont();
   }
   return new GlovDropDown(params);
+}
+
+export function dropDown(param, current, opts) {
+  opts = opts || {};
+  param.auto_reset = false; // Handled every frame here automatically
+  let { suppress_return_during_dropdown } = opts;
+  // let dropdown = getUIElemData<SelectionBox, SelectionBoxOpts>('dropdown', param, dropDownCreate);
+  let dropdown = getUIElemData('dropdown', param, dropDownCreate);
+  dropdown.applyParams(param);
+  if (!dropdown.isDropdownVisible()) {
+    dropdown.setSelected(current);
+  }
+  let old_selected;
+  if (suppress_return_during_dropdown) {
+    let old_idx = dropdown.findIndex(current);
+    old_selected = old_idx === -1 ? null : dropdown.items[old_idx];
+  } else {
+    old_selected = dropdown.getSelected();
+  }
+  dropdown.run();
+  if (suppress_return_during_dropdown && dropdown.was_clicked ||
+    !suppress_return_during_dropdown
+  ) {
+    if (old_selected !== dropdown.getSelected()) {
+      // Return input item (which may have additional data lost upon conversion
+      //   to a MenuItem), instead of `dropdown.getSelected()`
+      return param.items[dropdown.selected];
+    }
+  }
+  return null;
 }

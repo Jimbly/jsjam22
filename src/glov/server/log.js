@@ -15,18 +15,30 @@ const { format } = winston;
 const Transport = require('winston-transport');
 require('winston-daily-rotate-file');
 
-let dumpToFile = false;
+let log_dump_to_logger = true;
 let log_dir = './logs/';
 let last_uid = 0;
 let pid = process.pid;
 let puid = processUID();
 let logger = {};
 let raw_console = {};
-if (pid === 1 && process.env.PODNAME) {
+if (pid < 100 && process.env.PODNAME) {
   pid = process.env.PODNAME;
   let split = pid.split('-');
-  if (split.length > 2) {
-    pid = `${split[0][0]}${split.pop()}`;
+  let tail = split.pop();
+  if (split.includes('worker')) {
+    // test-worker-foo-1234
+    pid = `w${tail}`;
+  } else if (split.includes('master')) {
+    // test-master-foo-1234
+    // master-instance-foo-1234
+    pid = `m${tail}`;
+  } else if (split.length > 2) {
+    // instance-foo-1234
+    pid = `${split[0][0]}${tail}`;
+  }
+  if (process.pid !== 1) {
+    pid += `-${process.pid}`;
   }
   console.log(`Using fake logging PID of ${pid}`);
 }
@@ -49,25 +61,30 @@ export function logDowngradeErrors(do_downgrade) {
   }
 }
 
+let last_external_uid = 0;
 export function getUID() {
-  return ++last_uid;
+  return ++last_external_uid;
 }
 
 export function logDumpJSON(prefix, data, ext) {
-  if (dumpToFile) {
-    let filename = path.join(log_dir, `${prefix}-${pid}-${++last_uid}.${ext || 'log'}`);
-    fs.writeFile(filename, JSON.stringify(data), function (err) {
-      if (err) {
-        console.error(`Error writing to log file ${filename}`, err);
-      }
-    });
+  let filename = path.join(log_dir, `${prefix}-${pid}-${getUID()}.${ext || 'log'}`);
+  fs.writeFile(filename, JSON.stringify(data), function (err) {
+    if (err) {
+      console.error(`Error writing to log file ${filename}`, err);
+    }
+  });
+
+  if (!log_dump_to_logger) {
     return filename;
-  } else {
-    let crash_id = `${prefix}-${++last_uid}`;
-    let level = prefix === 'crash' || prefix === 'error' ? 'error' : 'warn';
-    logger.log(level, crash_id, data);
-    return `LOG:${crash_id}`;
   }
+  let level = prefix === 'crash' || prefix === 'error' ? 'error' : 'warn';
+  let pre_log_uid = ++last_uid;
+  let crash_uid = ++last_uid;
+  let crash_id = `${prefix}-${crash_uid}`;
+  logger.log(level, `Writing dump to log with crash_id=${crash_id}, also saved to ${filename}`, { uid: pre_log_uid });
+  data.uid = crash_uid;
+  logger.log(level, crash_id, data);
+  return `LOG:${crash_id},FILE:${filename}`;
 }
 
 function argProcessor(arg) {
@@ -108,6 +125,7 @@ export function logEx(context, level, ...args) {
     message = 'NO_MESSAGE';
   }
   context.message = message;
+  context.uid = ++last_uid;
   logger.log(context);
 }
 
@@ -183,7 +201,9 @@ const STACKDRIVER_SEVERITY = {
 // reference: https://gist.github.com/jasperkuperus/9df894041e3d5216ce25af03d38ec3f1
 const stackdriverFormat = format((data) => {
   data.pid = pid;
-  data.uid = ++last_uid;
+  if (!data.uid) {
+    data.uid = ++last_uid;
+  }
   data.severity = STACKDRIVER_SEVERITY[data[LEVEL]] || STACKDRIVER_SEVERITY.info;
   data.puid = puid;
   return data;
@@ -192,7 +212,9 @@ const stackdriverFormat = format((data) => {
 // Simulate an output similar to stackdriver for comparable local logs
 const stackdriverLocalFormat = format((data) => {
   data.pid = pid;
-  data.uid = ++last_uid;
+  if (!data.uid) {
+    data.uid = ++last_uid;
+  }
   // data.puid = puid;
   return {
     severity: STACKDRIVER_SEVERITY[data[LEVEL]] || STACKDRIVER_SEVERITY.info,
@@ -246,7 +268,7 @@ export function startup(params) {
         }));
       }
       // Human-readable/grep-able console logger
-      dumpToFile = true;
+      log_dump_to_logger = false;
       args.push(format.metadata());
       if (config_log.timestamp_format === 'long') {
         // implicitly toISOString, can get local time with {format: 'YYYY-MM-DDTHH:mm:ss.SSSZZ'}
@@ -275,7 +297,7 @@ export function startup(params) {
             let meta = Object.keys(data.metadata).length !== 0 ?
               ` | ${inspect(data.metadata, { breakLength: Infinity, compact: true })}` :
               '';
-            return `[${data.timestamp} ${pid} ${last_uid++}] ${data.level} ${data.message}${meta}`;
+            return `[${data.timestamp} ${pid} ${++last_uid}] ${data.level} ${data.message}${meta}`;
           })
         );
       }
@@ -307,7 +329,7 @@ export function startup(params) {
   //warn('TESTING WARN LEVEL', { foo: 'bar' });
   //error('TESTING ERROR LEVEL', { foo: 'bar' }, { baaz: 'quux' });
 
-  if (dumpToFile && !fs.existsSync(log_dir)) {
+  if (!fs.existsSync(log_dir)) {
     console.info(`Creating ${log_dir}...`);
     fs.mkdirSync(log_dir);
   }

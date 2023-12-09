@@ -10,6 +10,7 @@ const { scrollAreaCreate } = require('./scroll_area.js');
 const { shadersGetDebug } = require('./shaders.js');
 const settings = require('./settings.js');
 const ui = require('./ui.js');
+const { uiTextHeight } = require('./ui.js');
 const { errorString } = require('glov/common/util.js');
 const { vec4 } = require('glov/common/vmath.js');
 
@@ -57,7 +58,8 @@ function shaderDebugUITick() {
   let x0 = camera2d.x0() + PANEL_PAD;
   const y0 = camera2d.y0() + PANEL_PAD;
   let z = Z.SHADER_DEBUG;
-  const { font, title_font, font_height } = ui;
+  const { font, title_font } = ui;
+  const font_height = uiTextHeight();
   let w = font_height * 20;
   let x = x0;
   let y = y0;
@@ -85,18 +87,18 @@ function shaderDebugUITick() {
   let button_w = sub_w - score_w - PAD;
 
   font.draw({
-    x: x + button_w + PAD, y: y + ui.font_height * 0.5, z,
+    x: x + button_w + PAD, y: y + font_height * 0.5, z,
     w: subscore_w - 1,
     color: 0x404040ff,
-    size: ui.font_height * 0.5,
+    size: font_height * 0.5,
     text: 'Ops',
     align: font.ALIGN.HCENTERFIT,
   });
   font.draw({
-    x: x + button_w + PAD + subscore_w + 1, y: y + ui.font_height * 0.5, z,
+    x: x + button_w + PAD + subscore_w + 1, y: y + font_height * 0.5, z,
     w: subscore_w - 1,
     color: 0x404040ff,
-    size: ui.font_height * 0.5,
+    size: font_height * 0.5,
     text: 'Bytes',
     align: font.ALIGN.HCENTERFIT,
   });
@@ -170,7 +172,7 @@ function shaderDebugUITick() {
   y = scroll_y_start + min(max_h, y);
   z = Z.SHADER_DEBUG;
 
-  let close_button_size = ui.font_height;
+  let close_button_size = font_height;
   if (ui.buttonText({
     x: x0 + w - close_button_size,
     y: y0, z: z + 1,
@@ -241,7 +243,7 @@ function shaderDebugUITick() {
           text: `${subpath}: ${value}`,
           align: font.ALIGN.HFIT,
         });
-        y += ui.font_height;
+        y += font_height;
       }
     }
   }
@@ -266,7 +268,7 @@ function shaderDebugUITick() {
     flatten(stats);
   }
 
-  let source_height = ui.font_height * 0.5;
+  let source_height = font_height * 0.5;
 
   if (stats?.text) {
     y += PAD;

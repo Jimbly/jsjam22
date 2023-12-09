@@ -18,14 +18,22 @@ module.exports = {
     "gl": true,
     "Z": true,
     "profilerStart": true,
+    "profilerStartFunc": true,
     "profilerStop": true,
+    "profilerStopFunc": true,
     "profilerStopStart": true,
     // Our pre-processor defines
     "BUILD_TIMESTAMP": true,
+    "__funcname": true,
+    // For Node types
+    "NodeJS": true,
+    // Our global types
+    "Constructor": true,
   },
   "parser": "@typescript-eslint/parser",
   "plugins": [
     "@typescript-eslint",
+    "html",
     "import",
   ],
   "extends": [
@@ -40,10 +48,14 @@ module.exports = {
   },
   "rules": {
     "@typescript-eslint/explicit-module-boundary-types": "off",
+    "@typescript-eslint/member-delimiter-style": "error",
     "@typescript-eslint/no-array-constructor": "error",
+    "@typescript-eslint/no-dupe-class-members": "error",
     "@typescript-eslint/no-empty-function": "error",
     "@typescript-eslint/no-extra-semi": "error",
+    "@typescript-eslint/no-inferrable-types": "off",
     "@typescript-eslint/no-invalid-this": "error",
+    "@typescript-eslint/no-non-null-assertion": "off",
     "@typescript-eslint/no-redeclare": "error",
     "@typescript-eslint/no-shadow": [
       "error",
@@ -54,8 +66,17 @@ module.exports = {
       "error",
       { "args": "none" }
     ],
+    "@typescript-eslint/no-use-before-define": [
+      "error",
+      {
+        "classes": true,
+        "functions": true,
+        "variables": true
+      }
+    ],
     "@typescript-eslint/no-useless-constructor": "error",
     "@typescript-eslint/no-var-requires": "off",
+    "@typescript-eslint/semi": "error",
 
     "accessor-pairs": "error",
     "array-bracket-newline": ["error", "consistent"], // JE
@@ -103,12 +124,6 @@ module.exports = {
     "computed-property-spacing": [
       "error",
       "never"
-    ],
-    "consistent-return": [
-      "error",
-      {
-        "treatUndefinedAsUnspecified": true,
-      }
     ],
     "consistent-this": "off", // JE
     "constructor-super": "error",
@@ -161,6 +176,11 @@ module.exports = {
         "object",
         "type",
       ],
+      "pathGroups": [{
+        "pattern": "glov/**",
+        "group": "internal"
+      }],
+      "pathGroupsExcludedImportTypes": ["type"],
       "warnOnUnassignedImports": true,
       "alphabetize": {
         "order": "asc",
@@ -261,7 +281,7 @@ module.exports = {
     "no-delete-var": "error",
     "no-div-regex": "error",
     "no-dupe-args": "error",
-    "no-dupe-class-members": "error",
+    "no-dupe-class-members": "off", // replaced with @typescript-eslint/no-dupe-class-members
     "no-dupe-keys": "error",
     "no-duplicate-case": "error",
     "no-duplicate-imports": "error",
@@ -394,14 +414,7 @@ module.exports = {
     "no-unused-expressions": "error",
     "no-unused-labels": "error",
     "no-unused-vars": "off", // Replaced with @typescript-eslint/no-unused-vars
-    "no-use-before-define": [
-      "error",
-      {
-        "classes": true,
-        "functions": true,
-        "variables": true
-      }
-    ],
+    "no-use-before-define": "off", // Replaced with @typescript-eslint/no-use-before-define
     "no-useless-call": "error",
     "no-useless-computed-key": "error",
     "no-useless-concat": "error",
@@ -468,7 +481,7 @@ module.exports = {
     "require-jsdoc": "off",
     "require-unicode-regexp": "off", // JE: Hasn't caught anything useful, generates bigger code
     "rest-spread-spacing": "error",
-    "semi": "error",
+    "semi": "off", // replaced by @typescript-eslint/semi
     "semi-spacing": "error",
     "semi-style": [
       "error",
@@ -537,11 +550,87 @@ module.exports = {
   },
   "overrides": [
     {
-      // enable the rule specifically for TypeScript files
+      // Enable rules specifically for JavaScript files
+      "files": ["*.js"],
+      "rules": {
+        "consistent-return": [
+          "error",
+          {
+            "treatUndefinedAsUnspecified": true,
+          }
+        ],
+      }
+    },
+    {
+      // Enable rules specifically for TypeScript files
       "files": ["*.ts", "*.tsx"],
       "rules": {
+        "@typescript-eslint/explicit-function-return-type": ["error", {
+          "allowExpressions": true,
+        }],
         "@typescript-eslint/explicit-module-boundary-types": "error",
+        // TODO: resolve issues on existing files, or disable, enforce this going forward:
+        // "@typescript-eslint/naming-convention": [
+        //   "error",
+        //   // exceptions
+        //   {
+        //     selector: ['property'],
+        //     format: ['snake_case'],
+        //     leadingUnderscore: 'allow',
+        //     trailingUnderscore: 'forbid',
+        //     filter: {
+        //       regex: '^_opaque$',
+        //       match: true,
+        //     },
+        //   },
+        //   // function parameters, variables: strictly snake_case
+        //   {
+        //     selector: ['default', 'parameter', 'parameterProperty', 'variable'],
+        //     format: ['snake_case'],
+        //     leadingUnderscore: 'forbid',
+        //     trailingUnderscore: 'forbid',
+        //   },
+        //   // variables: unless const, then UPPER_CASE
+        //   {
+        //     selector: ['variable'],
+        //     format: ['snake_case', 'UPPER_CASE'],
+        //     modifiers: ['const'],
+        //     leadingUnderscore: 'forbid',
+        //     trailingUnderscore: 'forbid',
+        //   },
+        //   // properties, same as variables, but cannot tell if they're "const", so allow both
+        //   {
+        //     selector: ['property'],
+        //     format: ['snake_case', 'UPPER_CASE'],
+        //     leadingUnderscore: 'forbid',
+        //     trailingUnderscore: 'forbid',
+        //   },
+        //   {
+        //     selector: ['function', 'method', 'classMethod', 'typeMethod'],
+        //     format: ['camelCase'],
+        //     leadingUnderscore: 'forbid',
+        //     trailingUnderscore: 'forbid',
+        //   },
+        //   {
+        //     selector: ['enumMember'],
+        //     format: ['PascalCase', 'UPPER_CASE'],
+        //     leadingUnderscore: 'forbid',
+        //     trailingUnderscore: 'forbid',
+        //   },
+        //   {
+        //     selector: ['class', 'enum', 'interface', 'typeAlias', 'typeParameter'],
+        //     format: ['PascalCase'],
+        //     leadingUnderscore: 'forbid',
+        //     trailingUnderscore: 'forbid',
+        //   },
+        //   {
+        //     selector: ['objectLiteralMethod'],
+        //     format: ['snake_case', 'camelCase'],
+        //     leadingUnderscore: 'forbid',
+        //     trailingUnderscore: 'forbid',
+        //   },
+        // ],
       }
-    }
+    },
   ]
 };

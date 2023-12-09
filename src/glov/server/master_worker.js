@@ -2,26 +2,15 @@ export let LOAD_ESTIMATE = {
   def: 10, // 1% CPU
 };
 
-/* eslint-disable import/order */
-import {
-  VersionSupport,
-  getFallbackEnvironment,
-  getVersionSupport,
-  isValidVersion,
-  isVersionUpToDate,
-  setFallbackEnvironments,
-  setLatestVersions,
-} from './version_management';
-import { getPlatformValues, isValidPlatform } from 'glov/common/enums';
-
-const assert = require('assert');
-const { channelServerSendNoCreate, LOAD_REPORT_INTERVAL } = require('./channel_server.js');
-const { ChannelWorker } = require('./channel_worker.js');
-const { loadBiasMap } = require('./load_bias_map.js');
+import assert from 'assert';
 const { max } = Math;
-const metrics = require('./metrics.js');
-const { serverConfig } = require('./server_config.js');
-const { callEach, nop, plural } = require('glov/common/util.js');
+import { callEach, nop, plural } from 'glov/common/util';
+import { LOAD_REPORT_INTERVAL, channelServerSendNoCreate } from './channel_server';
+import { ChannelWorker } from './channel_worker';
+import { loadBiasMap } from './load_bias_map';
+import * as metrics from './metrics';
+import { readyDataCheck } from './ready_data';
+import { serverConfig } from './server_config';
 
 // Do not attempt to recreate a channel if it was created this long ago, assume
 // the requester simply failed to send before the channel was created.
@@ -43,9 +32,6 @@ const LOAD_BIAS_REQUESTOR = 250; // 25% CPU
 const LOAD_BIAS_ERRORS = 50000;
 // Load level considered "unavailable" (normal load should all be < 1000, exceptional cases > 10000)
 const LOAD_AVAILABLE = 1000;
-
-const READY_DATA_CHANNEL = 'global.ready_data';
-const READY_DATA_KEY = 'private.ready_data';
 
 const RESTART_REASONS = {
   default: 'Might be a game update',
@@ -611,63 +597,6 @@ class MasterWorker extends ChannelWorker {
     this.log(`${this.cmd_parse_source.user_id}: /eat_cpu ${csid} ${percent}`);
     this.sendChannelMessage(`channel_server.${csid}`, 'eat_cpu', { percent }, resp_func);
   }
-  cmdGetLatestPlatformVersions(str, resp_func) {
-    this.sendChannelMessage(READY_DATA_CHANNEL, 'get_channel_data', `${READY_DATA_KEY}.latest_platform_versions`,
-      function (err, data) {
-        resp_func(err, err ? null : data ?? {});
-      }
-    );
-  }
-  cmdSetLatestPlatformVersion(str, resp_func) {
-    str = str.split(' ');
-    if (str.length !== 1 && str.length !== 2) {
-      return void resp_func('Invalid parameters');
-    }
-    let plat = str[0];
-    if (!isValidPlatform(plat)) {
-      return void resp_func(`Invalid platform, must be one of the following:\n${getPlatformValues().join(', ')}`);
-    }
-    let ver = str[1];
-    if (!ver) {
-      ver = undefined;
-    }
-    if (ver !== undefined && !isValidVersion(ver)) {
-      return void resp_func('Invalid version format');
-    }
-    this.log(`${this.cmd_parse_source.user_id}: /set_latest_platform_version ${plat} ${ver}`);
-    this.setChannelDataOnOther(READY_DATA_CHANNEL, `${READY_DATA_KEY}.latest_platform_versions.${plat}`, ver,
-      function (err) {
-        resp_func(err, err ? null : `Latest version '${ver}' set for the '${plat}' platform`);
-      }
-    );
-  }
-  cmdGetFallbackEnvironments(str, resp_func) {
-    this.sendChannelMessage(READY_DATA_CHANNEL, 'get_channel_data', `${READY_DATA_KEY}.fallback_environments`,
-      function (err, data) {
-        resp_func(err, err ? null : data ?? {});
-      }
-    );
-  }
-  cmdSetFallbackEnvironment(str, resp_func) {
-    str = str.split(' ');
-    if (str.length !== 1 && str.length !== 2) {
-      return void resp_func('Invalid parameters');
-    }
-    let plat = str[0];
-    if (!isValidPlatform(plat)) {
-      return void resp_func(`Invalid platform, must be one of the following:\n${getPlatformValues().join(', ')}`);
-    }
-    let env = str[1];
-    if (!env) {
-      env = undefined;
-    }
-    this.log(`${this.cmd_parse_source.user_id}: /set_fallback_environment ${plat} ${env}`);
-    this.setChannelDataOnOther(READY_DATA_CHANNEL, `${READY_DATA_KEY}.fallback_environments.${plat}`, env,
-      function (err) {
-        resp_func(err, err ? null : `Fallback environment '${env}' set for the '${plat}' platform`);
-      }
-    );
-  }
 
   tick(dt) {
     let timed_out_csids;
@@ -795,28 +724,6 @@ export function init(channel_server) {
       help: 'Broadcast a chat message to all users',
       access_run: ['sysadmin'],
       func: MasterWorker.prototype.cmdAdminBroadcast,
-    }, {
-      cmd: 'get_latest_platform_versions',
-      help: 'Gets the latest known versions for all the platforms',
-      access_run: ['sysadmin'],
-      func: MasterWorker.prototype.cmdGetLatestPlatformVersions,
-    }, {
-      cmd: 'set_latest_platform_version',
-      help: 'Sets the latest client version for a platform',
-      usage: '$HELP\nUsage: /set_latest_platform_version <platform> [version]\n',
-      access_run: ['sysadmin'],
-      func: MasterWorker.prototype.cmdSetLatestPlatformVersion,
-    }, {
-      cmd: 'get_fallback_environments',
-      help: 'Gets the fallback environment names for all the platforms',
-      access_run: ['sysadmin'],
-      func: MasterWorker.prototype.cmdGetFallbackEnvironments,
-    }, {
-      cmd: 'set_fallback_environment',
-      help: 'Sets the fallback environment name for a platform',
-      usage: '$HELP\nUsage: /set_fallback_environment <platform> [environment]\n',
-      access_run: ['sysadmin'],
-      func: MasterWorker.prototype.cmdSetFallbackEnvironment,
     }],
     handlers: {
       load: MasterWorker.prototype.handleLoad,
@@ -842,6 +749,7 @@ export function masterInitApp(channel_server, app, argv) {
   }
   app.get('/api/ready', function (req, res, next) {
     // Note: not necessarily called in the same process as the master worker itself
+    res.header('Cache-Control', 'no-store');
 
     let plat = req.query.plat ?? null;
     let ver = req.query.ver ?? null;
@@ -866,28 +774,8 @@ export function masterInitApp(channel_server, app, argv) {
             ready_check_in_flight = false;
             return;
           }
-          channel_server.sendAsChannelServer(READY_DATA_CHANNEL, 'get_channel_data', READY_DATA_KEY,
-            function (err, ready_data) {
-              if (err === 'ERR_UNKNOWN_CHANNEL_TYPE') {
-                // No global worker defined in this deployment
-                err = null;
-                ready_data = null;
-              }
-              if (err) {
-                ready_cache_err = err;
-                ready_check_in_flight = false;
-                return;
-              }
-              // ready_data: {
-              //   latest_platform_versions?: Partial<Record<Platform, string>>,
-              //   fallback_environments?: Partial<Record<Platform, string>>,
-              // }
-              setLatestVersions(ready_data?.latest_platform_versions);
-              setFallbackEnvironments(ready_data?.fallback_environments);
-              ready_cache_err = null;
-              ready_check_in_flight = false;
-            }
-          );
+          ready_cache_err = null;
+          ready_check_in_flight = false;
         });
       }
     }
@@ -896,30 +784,8 @@ export function masterInitApp(channel_server, app, argv) {
       return void returnReadyValue(res, ready_cache_err);
     }
 
-    if (!isValidPlatform(plat) || !isValidVersion(ver)) {
-      return void returnReadyValue(res, 'ERR_CLIENT_INVALID');
-    }
-
-    let extra_data = {};
-    if (!isVersionUpToDate(plat, ver)) {
-      extra_data.update_available = true;
-    }
-    let versionSupport = getVersionSupport(plat, ver);
-    switch (versionSupport) {
-      case VersionSupport.Supported:
-        return void returnReadyValue(res, null, extra_data);
-      case VersionSupport.Obsolete:
-        return void returnReadyValue(res, 'ERR_CLIENT_VERSION_OLD', extra_data);
-      case VersionSupport.Upcoming: {
-        let redirect_environment = getFallbackEnvironment(plat, ver);
-        if (redirect_environment) {
-          extra_data.redirect_environment = redirect_environment;
-        }
-        return void returnReadyValue(res, 'ERR_CLIENT_VERSION_NEW', extra_data);
-      }
-      default:
-        assert(false);
-    }
+    let { err, extra_data } = readyDataCheck(plat, ver);
+    return void returnReadyValue(res, err, extra_data);
   });
   app.get('/api/deployready', function (req, res, next) {
     let expected_secret = serverConfig().deploy_ready_secret;

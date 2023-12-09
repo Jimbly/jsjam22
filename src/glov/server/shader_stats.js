@@ -2,7 +2,6 @@
 const { execFile } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
-const glslang_validator = require('glslang-validator-prebuilt-predownloaded');
 const os = require('os');
 const path = require('path');
 const { errorString, nop } = require('../common/util.js');
@@ -64,9 +63,14 @@ function parseSPRIVDisassembly(text) {
   return ret;
 }
 
+let glslang_validator;
 function getShaderStats(stage, text, cb) {
   let validator_path;
   try {
+    if (!glslang_validator) {
+      // eslint-disable-next-line global-require
+      glslang_validator = require('glslang-validator-prebuilt-predownloaded');
+    }
     validator_path = glslang_validator.getPath();
   } catch (e) {
     return void cb(errorString(e));

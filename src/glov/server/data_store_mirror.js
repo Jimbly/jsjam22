@@ -177,6 +177,6 @@ DataStoreMirror.prototype.getAsyncBuffer = function (obj_name, cb) {
   this.write_ds.getAsyncBuffer(obj_name, wrapped.onDone.bind(wrapped, 1));
 };
 
-export function create(options) {
+export function dataStoreMirrorCreate(options) {
   return new DataStoreMirror(options);
 }

@@ -32,8 +32,11 @@ const { netClient, netClientId, netDisconnected } = require('./net.js');
 const { perfCounterHistory } = require('glov/common/perfcounters.js');
 const { profilerUI } = require('./profiler_ui.js');
 const settings = require('./settings.js');
+const { spriteChainedStart, spriteChainedStop } = require('./sprites.js');
 const ui = require('./ui.js');
+const { uiTextHeight } = require('./ui.js');
 const { vec4, v3copy } = require('glov/common/vmath.js');
+require('./perf_net.js');
 
 const METRIC_PAD = 2;
 
@@ -52,7 +55,13 @@ settings.register({
     label: 'Show FPS',
     default_value: engine.DEBUG ? 1 : 0,
     type: cmd_parse.TYPE_INT,
-    range: [0,3],
+    enum_lookup: {
+      OFF: 0,
+      ON: 1,
+      MSPF: 2,
+      CPU: 3,
+      GC: 4,
+    }
   },
   fps_graph: {
     label: 'FPS Graph',
@@ -139,7 +148,8 @@ function friendlyCount(count) {
 function showMetric(y, metric) {
   let font = engine.font;
   let pad = METRIC_PAD;
-  let line_height = settings.render_scale_all < 1 ? ui.font_height / settings.render_scale_all : ui.font_height;
+  let font_height = uiTextHeight();
+  let line_height = settings.render_scale_all < 1 ? font_height / settings.render_scale_all : font_height;
   let METRIC_VALUE_WIDTH = line_height * (metric.width || 2.5);
   let x = camera2d.x1Real() - METRIC_VALUE_WIDTH - pad;
   let y0 = y;
@@ -219,6 +229,7 @@ function showMetricGraph(y, metric) {
   let x = camera2d.x1Real() - w;
   let h = LINE_HEIGHT + LINE_PAD * 2;
   let z = Z.FPSMETER;
+  spriteChainedStart();
   ui.drawRect(x, y - h, x + w, y, z++, bg_default);
   x += LINE_PAD;
   y -= LINE_PAD;
@@ -256,6 +267,7 @@ function showMetricGraph(y, metric) {
   }
   z += NUM_LINES;
   y -= LINE_HEIGHT + LINE_PAD;
+  spriteChainedStop();
   return y;
 }
 
@@ -316,7 +328,7 @@ function updatePerfProvider() {
   }
   if (channel_id) {
     perf_provider_data.in_flight = true;
-    netClient().send('perf_fetch', { channel_id, fields }, function (err, data) {
+    netClient().send('perf_fetch', { channel_id, fields }, null, function (err, data) {
       if (err) {
         console.error(`Error getting perf data: ${Object.keys(fields)}: ${err}`);
       }
@@ -386,7 +398,8 @@ export function draw() {
     let perf_data = updatePerfProvider() || {};
     let y = camera2d.y0Real();
     let y0 = y;
-    let line_height = settings.render_scale_all < 1 ? ui.font_height / settings.render_scale_all : ui.font_height;
+    let font_height = uiTextHeight();
+    let line_height = settings.render_scale_all < 1 ? font_height / settings.render_scale_all : font_height;
     let column_width = line_height * 6;
     let x0 = camera2d.x0Real();
     let x = x0 + column_width * 2;
@@ -423,6 +436,7 @@ export function draw() {
         }
       }
       let keys = Object.keys(by_key);
+      keys.sort();
       for (let ii = 0; ii < keys.length; ++ii) {
         let key = keys[ii];
         let data = by_key[key];

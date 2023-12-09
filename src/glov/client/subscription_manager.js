@@ -1,45 +1,78 @@
 // Portions Copyright 2019 Jimb Esser (https://github.com/Jimbly/)
 // Released under MIT License: https://opensource.org/licenses/MIT
 
-/* eslint-disable import/order */
-const assert = require('assert');
-const {
+import assert from 'assert';
+import {
+  externalUsersAutoLoginFallbackProvider,
+  externalUsersAutoLoginProvider,
+  externalUsersCurrentUser,
+  externalUsersEmailPassLoginProvider,
+  externalUsersEnabled,
+  externalUsersLogIn,
+  externalUsersLogOut,
+  externalUsersSendEmailConfirmation,
+} from 'glov/client/external_users_client';
+import {
   chunkedReceiverFinish,
+  chunkedReceiverFreeFile,
+  chunkedReceiverGetFile,
   chunkedReceiverInit,
   chunkedReceiverOnChunk,
   chunkedReceiverStart,
-  chunkedReceiverFreeFile,
-  chunkedReceiverGetFile,
-} = require('glov/common/chunked_send.js');
-import { PLATFORM_FBINSTANT } from 'glov/client/client_config.js';
-const dot_prop = require('glov/common/dot-prop.js');
-const EventEmitter = require('glov/common/tiny-events.js');
-const { fbGetLoginInfo } = require('./fbinstant.js');
-const local_storage = require('./local_storage.js');
-const md5 = require('glov/common/md5.js');
-const { netDisconnected } = require('./net.js');
-const { isPacket } = require('glov/common/packet.js');
-const { perfCounterAdd } = require('glov/common/perfcounters.js');
-const util = require('glov/common/util.js');
-const { errorString } = util;
-const walltime = require('./walltime.js');
+} from 'glov/common/chunked_send';
+import * as dot_prop from 'glov/common/dot-prop';
+import { ERR_NO_USER_ID } from 'glov/common/external_users_common';
+import * as md5 from 'glov/common/md5';
+import { isPacket } from 'glov/common/packet';
+import { perfCounterAdd } from 'glov/common/perfcounters';
+import * as EventEmitter from 'glov/common/tiny-events';
+import * as util from 'glov/common/util';
+import { cloneShallow } from 'glov/common/util';
+import * as local_storage from './local_storage';
+import { netDisconnected, netDisconnectedRaw } from './net';
+import * as walltime from './walltime';
 
 // relevant events:
 //   .on('channel_data', cb(data [, mod_key, mod_value]));
 
-function ClientChannelWorker(subs, channel_id, base_handlers) {
+function ClientChannelWorker(subs, channel_id, base_handlers, base_event_listeners) {
   EventEmitter.call(this);
   this.subs = subs;
   this.channel_id = channel_id;
+  let m = channel_id.match(/^([^.]*)\.(.*)$/);
+  assert(m);
+  this.channel_type = m[1];
+  this.channel_subid = m[2];
   this.subscriptions = 0;
   this.subscribe_failed = false;
   this.got_subscribe = false;
   this.immediate_subscribe = 0;
   this.channel_data_ver = 0; // for polling for changes
   this.handlers = Object.create(base_handlers);
+  this.base_event_listeners = base_event_listeners;
   this.data = {};
 }
 util.inherits(ClientChannelWorker, EventEmitter);
+
+ClientChannelWorker.prototype.getChannelID = function () {
+  return this.channel_id;
+};
+
+ClientChannelWorker.prototype.emit = function (event) {
+  // Using `arguments` instead of rest params because Babel is generating pretty
+  //   bloated code and this is a hot path.
+  // eslint-disable-next-line prefer-rest-params
+  let args = arguments;
+  EventEmitter.prototype.emit.apply(this, args);
+  if (this.base_event_listeners) {
+    let listeners = this.base_event_listeners[event];
+    if (listeners) {
+      for (let ii = 0; ii < listeners.length; ++ii) {
+        listeners[ii].apply(this, Array.prototype.slice.call(args, 1));
+      }
+    }
+  }
+};
 
 // cb(data)
 ClientChannelWorker.prototype.onSubscribe = function (cb) {
@@ -60,6 +93,13 @@ ClientChannelWorker.prototype.onceSubscribe = function (cb) {
   }
 };
 
+ClientChannelWorker.prototype.numSubscriptions = function () {
+  return this.subscriptions;
+};
+
+ClientChannelWorker.prototype.isFullySubscribed = function () {
+  return this.got_subscribe;
+};
 
 ClientChannelWorker.prototype.handleChannelData = function (data, resp_func) {
   console.log(`got channel_data(${this.channel_id}):  ${JSON.stringify(data)}`);
@@ -126,7 +166,7 @@ ClientChannelWorker.prototype.setChannelData = function (key, value, skip_predic
     dot_prop.set(this.data, key, value);
   }
   let q = value && value.q || undefined;
-  let pak = this.subs.client.pak('set_channel_data');
+  let pak = this.subs.client.pak('set_channel_data', `${this.channel_type}.set_channel_data`);
   pak.writeAnsiString(this.channel_id);
   pak.writeBool(q);
   pak.writeAnsiString(key);
@@ -145,7 +185,7 @@ ClientChannelWorker.prototype.onMsg = function (msg, cb) {
 };
 
 ClientChannelWorker.prototype.pak = function (msg) {
-  let pak = this.subs.client.pak('channel_msg');
+  let pak = this.subs.client.pak('channel_msg', `cm:${this.channel_type}.${msg}`);
   pak.writeAnsiString(this.channel_id);
   pak.writeAnsiString(msg);
   // pak.writeInt(flags);
@@ -158,11 +198,15 @@ ClientChannelWorker.prototype.send = function (msg, data, resp_func, old_fourth)
   this.subs.client.send('channel_msg', {
     channel_id: this.channel_id,
     msg, data,
-  }, resp_func);
+  }, `cm:${this.channel_type}.${msg}`, resp_func);
 };
 
 ClientChannelWorker.prototype.cmdParse = function (cmd, resp_func) {
   this.send('cmdparse', cmd, resp_func);
+};
+
+ClientChannelWorker.prototype.unsubscribe = function () {
+  this.subs.unsubscribe(this.channel_id);
 };
 
 function SubscriptionManager(client, cmd_parse) {
@@ -170,20 +214,25 @@ function SubscriptionManager(client, cmd_parse) {
   this.client = client;
   this.channels = {};
   this.logged_in = false;
+  this.first_session = false;
   this.login_credentials = null;
+  this.logged_in_email = null;
   this.logged_in_username = null;
+  this.logged_in_display_name = null;
   this.was_logged_in = false;
   this.logging_in = false;
   this.logging_out = false;
   this.auto_create_user = false;
   this.allow_anon = false;
   this.no_auto_login = false;
+  this.auto_login_error = undefined;
   this.cmd_parse = cmd_parse;
   if (cmd_parse) {
     this.cmds_fetched_by_type = {};
   }
   this.base_handlers = {};
   this.channel_handlers = {}; // channel type -> msg -> handler
+  this.channel_event_listeners = {}; // channel type -> event -> array of listeners
 
   this.first_connect = true;
   this.server_time = 0;
@@ -230,6 +279,17 @@ SubscriptionManager.prototype.onChannelMsg = function (channel_type, msg, cb) {
   handlers[msg] = cb;
 };
 
+SubscriptionManager.prototype.onChannelEvent = function (channel_type, event, cb) {
+  let listeners = this.channel_event_listeners[channel_type];
+  if (!listeners) {
+    listeners = this.channel_event_listeners[channel_type] = {};
+  }
+  if (!listeners[event]) {
+    listeners[event] = [];
+  }
+  listeners[event].push(cb);
+};
+
 SubscriptionManager.prototype.handleChatBroadcast = function (data) {
   console.error(`[${data.src}] ${data.msg}`);
   this.emit('chat_broadcast', data);
@@ -244,6 +304,30 @@ SubscriptionManager.prototype.handleDisconnect = function (data) {
   this.emit('disconnect', data);
 };
 
+SubscriptionManager.prototype.sendResubscribe = function () {
+  assert(!this.logging_in);
+  assert(this.need_resub);
+  if (netDisconnectedRaw()) {
+    // Will re-send upon reconnect
+    return;
+  }
+  // (re-)subscribe to all channels
+  for (let channel_id in this.channels) {
+    let channel = this.channels[channel_id];
+    if (channel.subscriptions) {
+      this.client.send('subscribe', channel_id, null, function (err) {
+        if (err) {
+          channel.subscribe_failed = true;
+          console.error(`Error subscribing to ${channel_id}: ${err}`);
+          channel.emit('subscribe_fail', err);
+        }
+      });
+    }
+  }
+  this.emit('connect', this.need_resub.reconnect);
+  this.need_resub = null;
+};
+
 SubscriptionManager.prototype.handleConnect = function (data) {
   let reconnect = false;
   if (this.first_connect) {
@@ -251,71 +335,65 @@ SubscriptionManager.prototype.handleConnect = function (data) {
   } else {
     reconnect = true;
   }
+  this.need_resub = { reconnect };
   this.restarting = Boolean(data.restarting);
   this.cack_data = data;
   walltime.sync(data.time);
 
-  if (!this.client.connected || this.client.socket.readyState !== 1) { // WebSocket.OPEN
-    // we got disconnected while trying to log in, we'll retry after reconnection
+  if (netDisconnectedRaw()) {
+    // we got disconnected while trying to log in, we'll retry after reconnecting
     return;
-  }
-
-  let subs = this;
-  function resub() {
-    // (re-)subscribe to all channels
-    for (let channel_id in subs.channels) {
-      let channel = subs.channels[channel_id];
-      if (channel.subscriptions) {
-        subs.client.send('subscribe', channel_id, function (err) {
-          if (err) {
-            channel.subscribe_failed = true;
-            console.error(`Error subscribing to ${channel_id}: ${err}`);
-            channel.emit('subscribe_fail', err);
-          }
-        });
-      }
-    }
-    subs.emit('connect', reconnect);
   }
 
   if (this.logging_in) {
     // already have a login in-flight, it should error before we try again
   } else if (this.was_logged_in) {
     // Try to re-connect to existing login
-    this.loginInternal(this.login_credentials, (err) => {
+    this.loginRetry((err) => {
       if (err && err === 'ERR_FAILALL_DISCONNECT') {
-        // we got disconnected while trying to log in, we'll retry after reconnection
+        // we got disconnected while trying to log in, we'll retry after reconnecting
       } else if (err) {
-        // Error logging in upon re-connection, no good way to handle this?
-        // TODO: Show some message to the user and prompt them to refresh?  Stay in "disconnected" state?
-        let credentials_str = this.login_credentials && this.login_credentials.password ?
-          'user_id, password' :
-          JSON.stringify(this.login_credentials);
-        assert(false, `Login failed for ${credentials_str}: ${errorString(err)}`);
-      } else {
-        resub();
+        this.auto_login_error = err;
       }
     });
   } else if (!this.no_auto_login) {
-    // Try auto-login
-    let auto_login_enabled = PLATFORM_FBINSTANT;
-
-    if (auto_login_enabled) {
-      let login_cb = () => {
-        // ignore error on auto-login
-      };
-      if (PLATFORM_FBINSTANT) {
-        this.loginFacebook(login_cb);
-      }
+    let auto_login_provider = externalUsersAutoLoginProvider(); // something like FBInstant - always auto logged in
+    let saved_provider;
+    if (auto_login_provider && externalUsersEnabled(auto_login_provider)) {
+      // Try auto-login but ignore any error
+      this.loginExternal({ provider: auto_login_provider }, (err) => {
+        if (err === ERR_NO_USER_ID && externalUsersAutoLoginFallbackProvider()) {
+          // Login was validated, but no user id exists, and was not auto-created,
+          //   send the credentials to the fallback provider to auto-create a user.
+          this.loginExternal({
+            provider: externalUsersAutoLoginFallbackProvider(),
+            external_login_data: cloneShallow(this.login_credentials.external_login_data),
+          }, (err) => {
+            this.auto_login_error = err;
+          });
+          return;
+        }
+        this.auto_login_error = err;
+      });
     } else if (local_storage.get('name') && local_storage.get('password')) {
-      this.login(local_storage.get('name'), local_storage.get('password'), function () {
-        // ignore error on auto-login
+      this.login(local_storage.get('name'), local_storage.get('password'), (err) => {
+        this.auto_login_error = err;
+      });
+    } else if ((saved_provider = local_storage.get('login_external'))) {
+      let credentials = { provider: saved_provider };
+      this.loginInternal(credentials, (err) => {
+        if (err) {
+          this.auto_login_error = err;
+          // if the server returns an error log out
+          externalUsersLogOut(saved_provider);
+        }
       });
     }
+  }
 
-    resub();
-  } else {
-    resub();
+  // If logging in, will happen later; if disconnected, maybe have already triggered as an error
+  if (!this.logging_in && this.need_resub) {
+    this.sendResubscribe();
   }
 
   this.fetchCmds();
@@ -326,7 +404,7 @@ SubscriptionManager.prototype.fetchCmds = function () {
   let cmd_list = this.cmds_fetched_by_type;
   if (cmd_list && !cmd_list[channel_type]) {
     cmd_list[channel_type] = true;
-    this.client.send('cmd_parse_list_client', null, (err, resp) => {
+    this.client.send('cmd_parse_list_client', null, null, (err, resp) => {
       if (!err) {
         this.cmd_parse.addServerCommands(resp);
       }
@@ -357,8 +435,11 @@ SubscriptionManager.prototype.handleChannelMessage = function (pak, resp_func) {
     console.error(`no handler for channel_msg(${channel_id}) ${msg}: ${JSON.stringify(data)}`);
     return;
   }
-  perfCounterAdd(`cm.${channel_id.split('.')[0]}.${msg}`);
+  let msg_name = `${channel_id.split('.')[0]}.${msg}`;
+  perfCounterAdd(`cm.${msg_name}`);
+  profilerStart(msg_name);
   handler.call(channel, data, resp_func);
+  profilerStop(msg_name);
 };
 
 SubscriptionManager.prototype.handleServerTime = function (pak) {
@@ -386,14 +467,19 @@ SubscriptionManager.prototype.getServerTime = function () {
 
 SubscriptionManager.prototype.tick = function (dt) {
   this.server_time_interp += dt;
-  for (let channel_id in this.channels) {
-    let channel = this.channels[channel_id];
-    if (channel.immediate_subscribe) {
-      if (dt >= channel.immediate_subscribe) {
-        channel.immediate_subscribe = 0;
-        this.unsubscribe(channel_id);
-      } else {
-        channel.immediate_subscribe -= dt;
+  if (!netDisconnected()) {
+    // do not tick immediate subscriptions while disconnected *or* while logging in
+    //   as they will not be re-established (upon a disconnection) until *after*
+    //   login has finished.
+    for (let channel_id in this.channels) {
+      let channel = this.channels[channel_id];
+      if (channel.immediate_subscribe) {
+        if (dt >= channel.immediate_subscribe) {
+          channel.immediate_subscribe = 0;
+          this.unsubscribe(channel_id);
+        } else {
+          channel.immediate_subscribe -= dt;
+        }
       }
     }
   }
@@ -451,13 +537,14 @@ SubscriptionManager.prototype.getChannel = function (channel_id, do_subscribe) {
   if (!channel) {
     let channel_type = channel_id.split('.')[0];
     let handlers = this.getBaseHandlers(channel_type);
-    channel = this.channels[channel_id] = new ClientChannelWorker(this, channel_id, handlers);
+    let event_listeners = this.channel_event_listeners[channel_type];
+    channel = this.channels[channel_id] = new ClientChannelWorker(this, channel_id, handlers, event_listeners);
   }
   if (do_subscribe) {
     channel.subscriptions++;
-    if (!netDisconnected() && channel.subscriptions === 1) {
+    if (!netDisconnectedRaw() && channel.subscriptions === 1) {
       channel.subscribe_failed = false;
-      this.client.send('subscribe', channel_id, function (err) {
+      this.client.send('subscribe', channel_id, null, function (err) {
         if (err) {
           channel.subscribe_failed = true;
           console.error(`Error subscribing to ${channel_id}: ${err}`);
@@ -471,6 +558,14 @@ SubscriptionManager.prototype.getChannel = function (channel_id, do_subscribe) {
 
 SubscriptionManager.prototype.getUserId = function () {
   return this.loggedIn();
+};
+
+SubscriptionManager.prototype.getDisplayName = function () {
+  return this.logged_in_display_name;
+};
+
+SubscriptionManager.prototype.getLoginProvider = function () {
+  return this.login_provider;
 };
 
 SubscriptionManager.prototype.getMyUserChannel = function () {
@@ -493,7 +588,7 @@ SubscriptionManager.prototype.unsubscribe = function (channel_id) {
   if (!channel.subscriptions) {
     channel.got_subscribe = false;
   }
-  if (!netDisconnected() && !channel.subscriptions && !channel.subscribe_failed) {
+  if (!netDisconnectedRaw() && !channel.subscriptions && !channel.subscribe_failed) {
     this.client.send('unsubscribe', channel_id);
   }
 };
@@ -533,17 +628,27 @@ SubscriptionManager.prototype.userOnChannelData = function (expected_user_id, da
 
 SubscriptionManager.prototype.handleLoginResponse = function (resp_func, err, resp) {
   this.logging_in = false;
+  let evt = 'login_fail';
   if (!err) {
+    evt = 'login';
+    this.first_session = Boolean(resp.first_session);
+    this.logged_in_email = resp.email;
     this.logged_in_username = resp.user_id;
     this.logged_in_display_name = resp.display_name;
     this.logged_in = true;
     this.was_logged_in = true;
     let user_channel = this.getMyUserChannel(); // auto-subscribe to it
     user_channel.onceSubscribe(() => {
-      if (!this.did_master_subscribe && user_channel.getChannelData('public.permissions.sysadmin')) {
+      if (!this.did_master_subscribe) {
         // For cmd_parse access
-        this.did_master_subscribe = true;
-        this.subscribe('master.master');
+        let perms = user_channel.getChannelData('public.permissions', {});
+        if (perms.sysadmin) {
+          this.subscribe('master.master');
+        }
+        if (perms.sysadmin || perms.csr) {
+          this.did_master_subscribe = true;
+          this.subscribe('global.global');
+        }
       }
     });
 
@@ -551,11 +656,70 @@ SubscriptionManager.prototype.handleLoginResponse = function (resp_func, err, re
       user_channel.on('channel_data', this.userOnChannelData.bind(this, this.logged_in_username));
       user_channel.subs_added_user_on_channel_data = true;
     }
-    this.emit('login');
-  } else {
-    this.emit('login_fail', err);
+    if (this.need_resub) {
+      this.sendResubscribe();
+    }
   }
+  if (this.need_resub) {
+    this.sendResubscribe();
+  }
+  this.emit(evt, err);
   resp_func(err);
+};
+
+SubscriptionManager.prototype.loginRetry = function (resp_func) {
+  this.loginInternal(this.login_credentials, resp_func);
+};
+
+SubscriptionManager.prototype.loginInternalExternalUsers = function (provider, login_credentials, resp_func) {
+  const {
+    email, password, creation_display_name, external_login_data
+  } = login_credentials;
+  const login_options = {
+    user_initiated: true,
+    creation_display_name,
+    email,
+    password,
+    external_login_data
+  };
+  return void externalUsersLogIn(provider, login_options, (err, login_data) => {
+    this.login_credentials.external_login_data = login_data;
+
+    if (err) {
+      local_storage.set('login_external', this.login_provider = undefined);
+      this.serverLog(`authentication_failed_${provider}`, {
+        creation_mode: typeof creation_display_name === 'string',
+        email,
+        passlen: password && password.length,
+        external_data: Boolean(external_login_data),
+        err,
+      });
+      return void this.handleLoginResponse(resp_func, err);
+    }
+
+    local_storage.set('login_external', this.login_provider = provider);
+    local_storage.set('password', undefined);
+
+    externalUsersCurrentUser(provider, (err, user_info) => {
+      if (err) {
+        // Ignore the error, display_name is optional
+      }
+      if (netDisconnectedRaw()) {
+        return void this.handleLoginResponse(resp_func, 'ERR_DISCONNECTED');
+      }
+      let request_data = {
+        provider,
+        validation_data: login_data.validation_data,
+        display_name: user_info?.name || '',
+      };
+      this.client.send('login_external', request_data, null, this.handleLoginResponse.bind(this, resp_func));
+    });
+  });
+};
+
+SubscriptionManager.prototype.sessionHashedPassword = function () {
+  assert(this.login_credentials.password);
+  return md5(this.client.secret + this.login_credentials.password);
 };
 
 SubscriptionManager.prototype.loginInternal = function (login_credentials, resp_func) {
@@ -564,22 +728,24 @@ SubscriptionManager.prototype.loginInternal = function (login_credentials, resp_
   }
   this.logging_in = true;
   this.logged_in = false;
+  this.login_credentials = login_credentials;
+  if (login_credentials.creation_display_name !== undefined) {
+    // Only used once, never use upon reconnect, auto-login, etc
+    this.login_credentials = cloneShallow(login_credentials);
+    delete this.login_credentials.creation_display_name;
+  }
 
-  if (login_credentials.fb) {
-    fbGetLoginInfo((err, result) => {
-      if (err) {
-        return void this.handleLoginResponse(resp_func, err);
-      }
-      if (!this.client.connected) {
-        return void this.handleLoginResponse(resp_func, 'ERR_DISCONNECTED');
-      }
-      this.client.send('login_facebook_instant', result, this.handleLoginResponse.bind(this, resp_func));
-    });
+  const { provider } = login_credentials;
+  if (provider) {
+    this.loginInternalExternalUsers(provider, login_credentials, resp_func);
   } else {
+    const {
+      user_id,
+    } = login_credentials;
     this.client.send('login', {
-      user_id: login_credentials.user_id,
-      password: md5(this.client.secret + login_credentials.password),
-    }, this.handleLoginResponse.bind(this, resp_func));
+      user_id,
+      password: this.sessionHashedPassword(),
+    }, null, this.handleLoginResponse.bind(this, resp_func));
   }
 };
 
@@ -589,12 +755,13 @@ SubscriptionManager.prototype.userCreateInternal = function (params, resp_func) 
   }
   this.logging_in = true;
   this.logged_in = false;
-  return this.client.send('user_create', params, this.handleLoginResponse.bind(this, resp_func));
+  return this.client.send('user_create', params, null, this.handleLoginResponse.bind(this, resp_func));
 };
 
 function hashedPassword(user_id, password) {
-  if (password.split('$$')[0] === 'prehashed') {
-    password = password.split('$$')[1];
+  let split = password.split('$$');
+  if (split.length === 2 && split[0] === 'prehashed' && split[1].length === 32) {
+    password = split[1];
   } else {
     password = md5(md5(user_id.toLowerCase()) + password);
   }
@@ -615,12 +782,12 @@ SubscriptionManager.prototype.login = function (username, password, resp_func) {
   if (hashed_password !== password) {
     local_storage.set('password', `prehashed$$${hashed_password}`);
   }
-  this.login_credentials = { user_id: username, password: hashed_password };
+  let credentials = { user_id: username, password: hashed_password };
   if (!this.auto_create_user) {
     // Just return result directly
-    return this.loginInternal(this.login_credentials, resp_func);
+    return this.loginInternal(credentials, resp_func);
   }
-  return this.loginInternal(this.login_credentials, (err, data) => {
+  return this.loginInternal(credentials, (err, data) => {
     if (!err || err !== 'ERR_USER_NOT_FOUND') {
       return void resp_func(err, data);
     }
@@ -634,9 +801,22 @@ SubscriptionManager.prototype.login = function (username, password, resp_func) {
   });
 };
 
-SubscriptionManager.prototype.loginFacebook = function (resp_func) {
-  this.login_credentials = { fb: true };
-  return this.loginInternal(this.login_credentials, resp_func);
+SubscriptionManager.prototype.loginEmailPass = function (credentials, resp_func) {
+  credentials = {
+    email: credentials.email,
+    password: credentials.password,
+    provider: externalUsersEmailPassLoginProvider(),
+    creation_display_name: credentials.creation_display_name,
+  };
+  return this.loginInternal(credentials, resp_func);
+};
+
+SubscriptionManager.prototype.loginExternal = function (credentials, resp_func) {
+  return this.loginInternal(cloneShallow(credentials), resp_func);
+};
+
+SubscriptionManager.prototype.sendActivationEmail = function (email, resp_func) {
+  return externalUsersSendEmailConfirmation(email, resp_func);
 };
 
 SubscriptionManager.prototype.userCreate = function (params, resp_func) {
@@ -683,7 +863,12 @@ SubscriptionManager.prototype.logout = function () {
   //   currently, clean up those we can, assert we have no others
   if (this.did_master_subscribe) {
     this.did_master_subscribe = false;
-    this.unsubscribe('master.master');
+    let user_channel = this.getMyUserChannel(); // auto-subscribe to it
+    let perms = user_channel && user_channel.getChannelData('public.permissions', {});
+    if (perms && perms.sysadmin) {
+      this.unsubscribe('master.master');
+    }
+    this.unsubscribe('global.global');
   }
   for (let channel_id in this.channels) {
     let channel = this.channels[channel_id];
@@ -698,17 +883,24 @@ SubscriptionManager.prototype.logout = function () {
   }
 
   this.logging_out = true;
-  this.client.send('logout', null, (err) => {
+  this.client.send('logout', null, null, (err) => {
     this.logging_out = false;
     if (!err) {
       local_storage.set('password', undefined);
+      local_storage.set('login_external', this.login_provider = undefined);
+      this.first_session = false;
       this.logged_in = false;
       this.logged_in_username = null;
+      this.logged_in_display_name = null;
       this.was_logged_in = false;
       this.login_credentials = null;
       this.emit('logout');
     }
   });
+};
+
+SubscriptionManager.prototype.isFirstSession = function () {
+  return this.first_session;
 };
 
 SubscriptionManager.prototype.serverLog = function (type, data) {

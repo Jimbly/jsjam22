@@ -11,6 +11,21 @@ html, body {
   position: absolute;
 }
 
+/* replace textarea font with fixed-width
+@font-face {
+  font-family: 'perfectvga';
+  src: url('perfectvga.woff2') format('woff2'),
+       url('perfectvga.woff') format('woff');
+  font-weight: normal;
+  font-style: normal;
+}
+
+textarea {
+  font-family: perfectvga,"Lucida Console",Courier,monospace;
+}
+*/
+
+
 a {
   color: #DDF;
   -webkit-tap-highlight-color: rgba(0,0,0,0); /* Work around Safari leaving stuck tap highlights */
@@ -110,7 +125,6 @@ canvas {
 .glovui_dynamic {
   font-size: 1em;
   position: absolute;
-  text-align: center;
   opacity: 1.0;
   pointer-events: auto;
 }
@@ -120,6 +134,38 @@ canvas {
   padding: 0;
   margin: 0;
   box-sizing: border-box;
+  background: white;
+  border-width: 1px;
+}
+
+.glovui_dynamic textarea.fixed {
+  resize: none;
+  overflow: hidden;
+  text-wrap: nowrap;
+
+  /* potentially useful for better blending if canvas_render is not an option:
+    background: rgba(1,1,1,0);
+    border: none;
+    outline: none;
+    color: #111;
+    caret-color:  #111;
+  */
+}
+.glovui_dynamic textarea.canvas_render {
+  resize: none;
+  background: rgba(1,1,1,0);
+  border: none;
+  outline: none;
+  overflow: hidden;
+  text-wrap: nowrap;
+
+  color: rgba(0,0,0,0);
+  caret-color: rgba(0,0,0,0);
+  /* debug alignment: color: rgba(255,0,255,0.5); */
+  /* debug alignment: caret-color: rgba(255,0,255,0.5); */
+}
+.glovui_dynamic textarea.canvas_render::selection {
+  color: rgba(0,0,0,0);
 }
 
 .glovui_link {

@@ -7,9 +7,13 @@ const { hsvToRGB, rgbToHSV } = require('./hsv.js');
 const input = require('./input.js');
 const { min } = Math;
 const ui = require('./ui.js');
-const { LINE_CAP_SQUARE } = ui;
-const { clipped, clipPause, clipResume, createSprite } = require('./sprites.js');
-const textures = require('./textures.js');
+const {
+  LINE_CAP_SQUARE,
+  uiButtonHeight,
+  buttonWasFocused,
+} = ui;
+const { spriteClipped, spriteClipPause, spriteClipResume, spriteCreate } = require('./sprites.js');
+const { TEXTURE_FORMAT } = require('./textures.js');
 const { clamp } = require('glov/common/util.js');
 const { vec3, v3copy, vec4 } = require('glov/common/vmath.js');
 
@@ -52,10 +56,10 @@ function initTextures() {
       data[idx++] = rgb[2] * 255;
     }
   }
-  picker_sprite_hue_sat = createSprite({
+  picker_sprite_hue_sat = spriteCreate({
     url: 'cpicker_hs',
     width: HS_SIZE, height: HS_SIZE,
-    format: textures.format.RGB8,
+    format: TEXTURE_FORMAT.RGB8,
     data,
     filter_min: gl.LINEAR,
     filter_mag: gl.LINEAR,
@@ -67,10 +71,10 @@ function initTextures() {
   for (let ii = 0; ii < data.length; ++ii) {
     data[ii] = 255 - ii * 255 / (data.length - 1);
   }
-  picker_sprite_val = createSprite({
+  picker_sprite_val = spriteCreate({
     url: 'cpicker_v',
     width: 1, height: data.length,
-    format: textures.format.R8,
+    format: TEXTURE_FORMAT.R8,
     data,
     filter_min: gl.LINEAR,
     filter_mag: gl.LINEAR,
@@ -81,9 +85,9 @@ function initTextures() {
 
 export function colorPicker(param) {
   let state = ui.getUIElemData('colorpicker', param, colorPickerAlloc);
-  let icon_h = param.icon_h || ui.button_height;
+  let icon_h = param.icon_h || uiButtonHeight();
   let icon_w = param.icon_w || icon_h;
-  let picker_h = param.picker_h || ui.button_height * 4;
+  let picker_h = param.picker_h || uiButtonHeight() * 4;
   let pad = param.pad || 3;
   let { x, y, z } = param;
 
@@ -103,12 +107,12 @@ export function colorPicker(param) {
       state.open = false;
     }
   }
-  let handled = ui.button_mouseover;
+  let handled = buttonWasFocused();
 
   if (state.open) {
-    let clip_pause = clipped();
+    let clip_pause = spriteClipped();
     if (clip_pause) {
-      clipPause();
+      spriteClipPause();
     }
 
     if (!picker_sprite_hue_sat) {
@@ -174,10 +178,10 @@ export function colorPicker(param) {
     ui.panel(panel_param);
 
     if (clip_pause) {
-      clipResume();
+      spriteClipResume();
     }
 
-    if (input.click({ peek: true }) || !handled && input.mouseDown({ peek: true })) {
+    if (input.click({ peek: true }) || !handled && input.mouseDownAnywhere()) {
       state.open = false;
     }
   }

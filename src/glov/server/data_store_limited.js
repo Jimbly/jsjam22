@@ -23,7 +23,7 @@ function DataStoreLimited(actual_ds, limit_time, set_delay_time, get_delay_time)
   this.per_obj_state = {};
 }
 
-export function create(actual_ds, limit_time, set_delay_time, get_delay_time) {
+export function dataStoreLimitedCreate(actual_ds, limit_time, set_delay_time, get_delay_time) {
   return new DataStoreLimited(actual_ds, limit_time, set_delay_time, get_delay_time);
 }
 
@@ -64,8 +64,10 @@ DataStoreLimited.prototype.setAsync = function (obj_name, value, cb) {
     let next_value = state.next_value;
     state.next_cbs = [];
     state.next_value = null;
+    state.writing = true;
     setTimeout(function () {
       self.actual_ds.setAsync(obj_name, next_value, function (err) {
+        state.writing = false;
         for (let ii = 0; ii < cbs.length; ++ii) {
           cbs[ii](err);
         }
@@ -79,20 +81,24 @@ DataStoreLimited.prototype.setAsync = function (obj_name, value, cb) {
 
 DataStoreLimited.prototype.getAsync = function (obj_name, default_value, cb) {
   let state = this.per_obj_state[obj_name];
-  assert(!state || !state.next_cbs.length, `Cannot get something that is still being written: ${obj_name}`);
+  assert(!state || !state.writing && !state.next_cbs.length,
+    `Cannot get something that is still being written: ${obj_name}`);
   setTimeout(() => {
     state = this.per_obj_state[obj_name];
-    assert(!state || !state.next_cbs.length, `Cannot get something that is still being written: ${obj_name}`);
+    assert(!state || !state.writing && !state.next_cbs.length,
+      `Cannot get something that is still being written: ${obj_name}`);
     this.actual_ds.getAsync(obj_name, default_value, cb);
   }, this.get_delay_time);
 };
 
 DataStoreLimited.prototype.getAsyncBuffer = function (obj_name, cb) {
   let state = this.per_obj_state[obj_name];
-  assert(!state || !state.next_cbs.length, `Cannot get something that is still being written: ${obj_name}`);
+  assert(!state || !state.writing && !state.next_cbs.length,
+    `Cannot get something that is still being written: ${obj_name}`);
   setTimeout(() => {
     state = this.per_obj_state[obj_name];
-    assert(!state || !state.next_cbs.length, `Cannot get something that is still being written: ${obj_name}`);
+    assert(!state || !state.writing && !state.next_cbs.length,
+      `Cannot get something that is still being written: ${obj_name}`);
     this.actual_ds.getAsyncBuffer(obj_name, cb);
   }, this.get_delay_time);
 };

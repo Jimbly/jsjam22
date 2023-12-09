@@ -192,6 +192,6 @@ DataStoreShield.prototype.search = function (collection, search, cb) {
   }, cb);
 };
 
-export function create(data_store, opts) {
+export function dataStoreShieldCreate(data_store, opts) {
   return new DataStoreShield(data_store, opts);
 }

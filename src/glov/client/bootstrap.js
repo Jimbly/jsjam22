@@ -8,7 +8,7 @@ require('./polyfill.js');
 let debug = document.getElementById('debug');
 window.onerror = function (e, file, line, col, errorobj) {
   let msg = String(e);
-  if (msg === '[object Object]') {
+  if (msg.startsWith('[object ')) {
     try {
       msg = JSON.stringify(e);
     } catch (ignored) {
@@ -16,10 +16,15 @@ window.onerror = function (e, file, line, col, errorobj) {
     }
     msg = msg.slice(0, 600); // Not too huge
   }
+  if (typeof errorobj === 'string') {
+    msg = `${msg} ${errorobj}`;
+  }
   if (file || line > 0 || col > 0) {
     msg += `\n  at ${file}(${line}:${col})`;
   }
+  let got_stack = false;
   if (errorobj && errorobj.stack) {
+    got_stack = true;
     msg = `${errorobj.stack}`;
     if (errorobj.message) {
       if (msg.indexOf(errorobj.message) === -1) {
@@ -43,14 +48,35 @@ window.onerror = function (e, file, line, col, errorobj) {
   if (msg.indexOf('Error:') === -1) {
     msg = `Error: ${msg}`;
   }
-  if (errorobj && errorobj.type) {
-    if (errorobj.type === 'unhandledrejection') {
+  if (errorobj && errorobj.errortype) {
+    if (errorobj.errortype === 'unhandledrejection') {
       msg = `Uncaught (in promise) ${msg}`;
+    }
+  }
+  if (errorobj) {
+    // Attempt to tack on any string members of the error object that may contain useful details
+    try {
+      if (typeof errorobj === 'object') {
+        for (let key in errorobj) {
+          if (typeof errorobj[key] === 'string') {
+            let value = errorobj[key];
+            if (key !== 'errortype' &&
+              !((key === 'stack' || key === 'message') && got_stack)
+            ) {
+              msg = `${msg}\n${key}=${value}`;
+            }
+          }
+        }
+      }
+    } catch (ignored) {
+      // ignored
     }
   }
   let show = true;
   if (window.glov_error_report) {
     show = window.glov_error_report(msg, file, line, col);
+  } else if (!window.glov_error_early) {
+    window.glov_error_early = { msg, file, line, col };
   }
   if (show) {
     debug.innerText = `${msg}\n\nPlease report this error to the developer,` +
@@ -66,8 +92,16 @@ window.addEventListener('unhandledrejection', function (event) {
   if (!errorobj || typeof errorobj !== 'object') {
     errorobj = { stack: errorobj };
   }
-  errorobj.type = event.type;
-  window.onerror(event.reason, undefined, 0, 0, errorobj);
+  let file;
+  if (event.reason && event.reason.srcElement && event.reason.srcElement.src) {
+    file = event.reason.srcElement.src;
+  }
+  try {
+    errorobj.errortype = event.type;
+  } catch (ignored) {
+    // ignore, happens on Firefox
+  }
+  window.onerror(event.reason, file, 0, 0, errorobj);
 });
 window.debugmsg = function (msg, clear) {
   if (clear) {

@@ -18,11 +18,18 @@ let map_analog_to_dpad = true;
 
 let mouse_log = false;
 
-exports.click = mouseUpEdge; // eslint-disable-line no-use-before-define
-exports.inputClick = mouseUpEdge; // eslint-disable-line no-use-before-define
+export const click = mouseUpEdge; // eslint-disable-line @typescript-eslint/no-use-before-define
+export const inputClick = mouseUpEdge; // eslint-disable-line @typescript-eslint/no-use-before-define
 
-export const ANY = -2;
-export const POINTERLOCK = -1;
+const { deprecate } = require('glov/common/util.js');
+deprecate(exports, 'mouseDown', 'mouseDownAnywhere, mouseDownMidClick, mouseDownOverBounds');
+
+import {
+  ANY,
+  POINTERLOCK,
+} from './input_constants';
+
+export * from './input_constants';
 
 export let KEYS = {
   BACKSPACE: 8,
@@ -45,7 +52,74 @@ export let KEYS = {
   DOWN: 40,
   INS: 45,
   DEL: 46,
+
+  0: 48,
+  1: 49,
+  2: 50,
+  3: 51,
+  4: 52,
+  5: 53,
+  6: 54,
+  7: 55,
+  8: 56,
+  9: 57,
+
+  A: 65,
+  B: 66,
+  C: 67,
+  D: 68,
+  E: 69,
+  F: 70,
+  G: 71,
+  H: 72,
+  I: 73,
+  J: 74,
+  K: 75,
+  L: 76,
+  M: 77,
+  N: 78,
+  O: 79,
+  P: 80,
+  Q: 81,
+  R: 82,
+  S: 83,
+  T: 84,
+  U: 85,
+  V: 86,
+  W: 87,
+  X: 88,
+  Y: 89,
+  Z: 90,
+
+  NUMPAD0: 96,
+  NUMPAD1: 97,
+  NUMPAD2: 98,
+  NUMPAD3: 99,
+  NUMPAD4: 100,
+  NUMPAD5: 101,
+  NUMPAD6: 102,
+  NUMPAD7: 103,
+  NUMPAD8: 104,
+  NUMPAD9: 105,
+  NUMPAD_MULTIPLY: 106,
+  NUMPAD_ADD: 107,
+  NUMPAD_SUBTRACT: 109,
+  NUMPAD_DECIMAL_POINT: 110,
   NUMPAD_DIVIDE: 111,
+
+  F1: 112,
+  F2: 113,
+  F3: 114,
+  F4: 115,
+  F5: 116,
+  F6: 117,
+  F7: 118,
+  F8: 119,
+  F9: 120,
+  F10: 121,
+  F11: 122,
+  F12: 123,
+
   EQUALS: 187,
   COMMA: 188,
   MINUS: 189,
@@ -53,14 +127,6 @@ export let KEYS = {
   SLASH: 191,
   TILDE: 192,
 };
-(function () {
-  for (let ii = 1; ii <= 12; ++ii) {
-    KEYS[`F${ii}`] = 111 + ii;
-  }
-  for (let ii = 48; ii <= 90; ++ii) { // 0-9;A-Z
-    KEYS[String.fromCharCode(ii)] = ii;
-  }
-}());
 if (typeof Proxy === 'function') {
   // Catch referencing keys that are not in our map
   KEYS = new Proxy(KEYS, {
@@ -112,16 +178,16 @@ const { is_firefox, is_mac_osx } = require('./browser.js');
 const camera2d = require('./camera2d.js');
 const { cmd_parse } = require('./cmds.js');
 const engine = require('./engine.js');
+const { renderNeeded } = require('./engine.js');
 const in_event = require('./in_event.js');
 const local_storage = require('./local_storage.js');
 const { abs, max, min, sqrt } = Math;
 const pointer_lock = require('./pointer_lock.js');
 const settings = require('./settings.js');
 const { soundResume } = require('./sound.js');
-const { spotMouseverHook, BUTTON_ANY } = require('./spot.js');
+const { spotMouseoverHook } = require('./spot.js');
+const { empty } = require('glov/common/util.js');
 const { vec2, v2add, v2copy, v2lengthSq, v2set, v2scale, v2sub } = require('glov/common/vmath.js');
-
-assert.equal(BUTTON_ANY, ANY);
 
 let pad_to_touch;
 
@@ -142,6 +208,7 @@ let input_eaten_kb = false;
 let input_eaten_mouse = false;
 
 let touches = {}; // `m${button}` or touch_id -> TouchData
+let no_active_touches = true;
 
 export let touch_mode = local_storage.getJSON('touch_mode', false);
 export let pad_mode = !touch_mode && local_storage.getJSON('pad_mode', false);
@@ -155,6 +222,10 @@ cmd_parse.registerValue('mouse_log', {
 
 export function inputTouchMode() {
   return touch_mode;
+}
+
+export function inputPadMode() {
+  return pad_mode;
 }
 
 export function inputEatenMouse() {
@@ -228,6 +299,7 @@ export function pointerLocked() {
   return pointer_lock.isLocked();
 }
 let pointerlock_touch_id = `m${POINTERLOCK}`;
+let pointerlock_frame = -1;
 // only works reliably when called from an event handler
 export function pointerLockEnter(when) {
   pointer_lock.enter(when);
@@ -236,6 +308,7 @@ function onPointerLockEnter() {
   if (touch_mode) {
     return;
   }
+  pointerlock_frame = engine.frame_index;
   let touch_data = touches[pointerlock_touch_id];
   setMouseToMid();
   if (touch_data) {
@@ -246,6 +319,9 @@ function onPointerLockEnter() {
     touch_data = touches[pointerlock_touch_id] = new TouchData(mouse_pos, false, POINTERLOCK, null);
   }
   movement_questionable_frames = MOVEMENT_QUESTIONABLE_FRAMES;
+}
+export function pointerLockJustEntered(num_frames) {
+  return engine.frame_index <= pointerlock_frame + (num_frames || 1);
 }
 export function pointerLockExit() {
   let touch_data = touches[pointerlock_touch_id];
@@ -276,9 +352,41 @@ function eventlog(event) {
   console.log(`${engine.frame_index} ${event.type} ${pointerLocked()?'ptrlck':'unlckd'} ${pairs.join(',')}`);
 }
 
+let allow_all_events = false;
+export function inputAllowAllEvents(allow) {
+  allow_all_events = allow;
+}
+
+function isInputElement(target) {
+  return target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' ||
+    target.tagName === 'LABEL' || target.tagName === 'VIDEO');
+}
+
+function letWheelEventThrough(event) {
+  // *not* checking for `noglov`, as links have these, and we want to capture scroll events even if mouse is over links
+  return allow_all_events || isInputElement(event.target);
+}
+
+let event_filter = () => false;
+
+// `filter` returns true if the event should be allowed to propgate to the DOM, and not be sent to the engine
+export function inputSetEventFilter(filter) {
+  event_filter = filter;
+}
+
 function letEventThrough(event) {
-  return event.target && (event.target.tagName === 'INPUT' || event.target.tagName === 'TEXTAREA' ||
-    event.target.tagName === 'LABEL' || String(event.target.className).includes('noglov'));
+  if (!event.target || allow_all_events || event.glov_do_not_cancel) {
+    return true;
+  }
+  // Going to an input or related element
+  return isInputElement(event.target) ||
+    String(event.target.className).includes('noglov') || event_filter(event);
+  /* Not doing this: this causes legitimate clicks (e.g. when an edit box is focused)
+      to be lost, instead, relying on `allow_all_events` when an HTML UI is active.
+    // or, one of those is focused, and going away from it (e.g. input elem focused, clicking on canvas)
+    document.activeElement && event.target !== document.activeElement &&
+    (isInputElement(document.activeElement) ||
+      String(document.activeElement.className).includes('noglov'));*/
 }
 
 function ignored(event) {
@@ -314,6 +422,7 @@ export function inputLastTime() {
 function onUserInput() {
   soundResume();
   last_input_time = Date.now();
+  renderNeeded();
 }
 
 function releaseAllKeysDown(evt) {
@@ -326,6 +435,7 @@ function releaseAllKeysDown(evt) {
 }
 
 function onKeyUp(event) {
+  renderNeeded();
   protectUnload(event.ctrlKey);
   let code = event.keyCode;
   if (!letEventThrough(event)) {
@@ -396,6 +506,7 @@ let last_abs_move_time = 0;
 let last_move_x = 0;
 let last_move_y = 0;
 function onMouseMove(event, no_stop) {
+  renderNeeded();
   /// eventlog(event);
   // Don't block mouse button 3, that's the Back button
   if (!letEventThrough(event) && !no_stop && event.button !== 3) {
@@ -552,6 +663,7 @@ function onMouseUp(event) {
 }
 
 function onWheel(event) {
+  renderNeeded();
   let saved = mouse_moved; // don't trigger mouseMoved()
   onMouseMove(event, true);
   mouse_moved = saved;
@@ -561,6 +673,11 @@ function onWheel(event) {
     delta: delta > 0 ? 1 : -1,
     dispatched: false,
   });
+
+  if (!letWheelEventThrough(event)) {
+    event.stopPropagation();
+    event.preventDefault();
+  }
 }
 
 let touch_pos = vec2();
@@ -587,6 +704,7 @@ function onTouchChange(event) {
 
   let new_count = ct.length;
   let old_count = 0;
+  let first_valid_touch;
   // Look for press and movement
   for (let ii = 0; ii < ct.length; ++ii) {
     let touch = ct[ii];
@@ -600,6 +718,9 @@ function onTouchChange(event) {
       // getting "Permission denied to access property "pageX" rarely on Firefox, simply ignore
       --new_count;
       continue;
+    }
+    if (!first_valid_touch) {
+      first_valid_touch = touch;
     }
 
     let last_touch = touches[touch.identifier];
@@ -659,11 +780,10 @@ function onTouchChange(event) {
       v2copy(mouse_pos, released_touch.cur_pos);
       mouse_pos_is_touch = true;
     } else if (new_count === 1) {
-      let touch = ct[0];
       if (!old_count) {
         mouse_down[0] = true;
       }
-      v2set(mouse_pos, touch.pageX, touch.pageY);
+      v2set(mouse_pos, first_valid_touch.pageX, first_valid_touch.pageY);
       mouse_pos_is_touch = true;
     } else if (new_count > 1) {
       // multiple touches, release mouse_down without emitting click
@@ -673,6 +793,7 @@ function onTouchChange(event) {
 }
 
 function onBlurOrFocus(evt) {
+  renderNeeded();
   protectUnload(false);
   releaseAllKeysDown(evt);
 }
@@ -941,6 +1062,7 @@ export function tickInput() {
   if (touches[pointerlock_touch_id] && !pointerLocked()) {
     pointerLockExit();
   }
+  no_active_touches = empty(touches);
 }
 
 function endFrameTickMap(map) {
@@ -1047,15 +1169,30 @@ export function mouseButtonHadUpEdge() {
   return mouse_button_had_up_edge;
 }
 
+const full_screen_pos_param = {};
+function mousePosParamUnique(param) {
+  param = param || full_screen_pos_param;
+  let pos_param = param.mouse_pos_param;
+  if (!pos_param) {
+    pos_param = param.mouse_pos_param = {};
+  }
+  pos_param.x = param.x === undefined ? camera2d.x0Real() : param.x;
+  pos_param.y = param.y === undefined ? camera2d.y0Real() : param.y;
+  pos_param.w = param.w === undefined ? camera2d.wReal() : param.w;
+  pos_param.h = param.h === undefined ? camera2d.hReal() : param.h;
+  pos_param.button = param.button === undefined ? ANY : param.button;
+  return pos_param;
+}
+
+let pos_param_temp = {};
 function mousePosParam(param) {
   param = param || {};
-  return {
-    x: param.x === undefined ? camera2d.x0Real() : param.x,
-    y: param.y === undefined ? camera2d.y0Real() : param.y,
-    w: param.w === undefined ? camera2d.wReal() : param.w,
-    h: param.h === undefined ? camera2d.hReal() : param.h,
-    button: param.button === undefined ? ANY : param.button,
-  };
+  pos_param_temp.x = param.x === undefined ? camera2d.x0Real() : param.x;
+  pos_param_temp.y = param.y === undefined ? camera2d.y0Real() : param.y;
+  pos_param_temp.w = param.w === undefined ? camera2d.wReal() : param.w;
+  pos_param_temp.h = param.h === undefined ? camera2d.hReal() : param.h;
+  pos_param_temp.button = param.button === undefined ? ANY : param.button;
+  return pos_param_temp;
 }
 
 let check_pos = vec2();
@@ -1099,10 +1236,12 @@ export function mouseOverCaptured() {
 }
 
 export function mouseOver(param) {
+  profilerStartFunc();
   param = param || {};
-  let pos_param = mousePosParam(param);
-  spotMouseverHook(pos_param, param);
+  let pos_param = mousePosParamUnique(param);
+  spotMouseoverHook(pos_param, param);
   if (mouse_over_captured || pointerLocked() && !param.allow_pointerlock) {
+    profilerStopFunc();
     return false;
   }
 
@@ -1120,27 +1259,46 @@ export function mouseOver(param) {
     }
   }
 
+  let ret = false;
   if (checkPos(mouse_pos, pos_param)) {
     if (!param.peek && !param.peek_over) {
       mouse_over_captured = true;
+    }
+    ret = true;
+  }
+  profilerStopFunc();
+  return ret;
+}
+
+export function mouseDownAnywhere(button) {
+  if (input_eaten_mouse) {
+    return false;
+  }
+  if (button === undefined) {
+    button = ANY;
+  }
+
+  for (let touch_id in touches) {
+    let touch_data = touches[touch_id];
+    if (touch_data.state !== DOWN ||
+      !(button === ANY || button === touch_data.button)
+    ) {
+      continue;
     }
     return true;
   }
   return false;
 }
 
-export function mouseDown(param) {
-  if (input_eaten_mouse) {
-    return null;
+export function mouseDownMidClick(param) {
+  if (input_eaten_mouse || no_active_touches) {
+    return false;
   }
+  // Same logic as mouseUpEdge()
   param = param || {};
   let pos_param = mousePosParam(param);
   let button = pos_param.button;
-  let max_click_dist = Infinity;
-  if (param.do_max_dist) {
-    // Defaulting to the same as mouseUpEdge()
-    max_click_dist = param.max_dist || 50; // TODO: relative to camera distance?
-  }
+  let max_click_dist = param.max_dist || 50; // TODO: relative to camera distance?
 
   for (let touch_id in touches) {
     let touch_data = touches[touch_id];
@@ -1151,18 +1309,34 @@ export function mouseDown(param) {
       continue;
     }
     if (checkPos(touch_data.cur_pos, pos_param)) {
-      // if (!param.peek) {
-      //   touch_data.up_edge = 0;
-      // }
-      return {
-        button: touch_data.button,
-        pos: check_pos.slice(0),
-        start_time: touch_data.start_time,
-      };
+      return true;
     }
   }
 
-  return null;
+  return false;
+}
+
+export function mouseDownOverBounds(param) {
+  if (input_eaten_mouse || no_active_touches) {
+    return false;
+  }
+  param = param || {};
+  let pos_param = mousePosParam(param);
+  let button = pos_param.button;
+
+  for (let touch_id in touches) {
+    let touch_data = touches[touch_id];
+    if (touch_data.state !== DOWN ||
+      !(button === ANY || button === touch_data.button)
+    ) {
+      continue;
+    }
+    if (checkPos(touch_data.cur_pos, pos_param)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 export function mousePosIsTouch() {
@@ -1305,6 +1479,9 @@ let delta = vec2();
 
 export function mouseUpEdge(param) {
   param = param || {};
+  if (input_eaten_mouse || !param.in_event_cb && no_active_touches) {
+    return null;
+  }
   let pos_param = mousePosParam(param);
   let button = pos_param.button;
   let max_click_dist = param.max_dist || 50; // TODO: relative to camera distance?
@@ -1340,7 +1517,7 @@ export function mouseUpEdge(param) {
     }
   }
 
-  if (param.in_event_cb && !input_eaten_mouse && !mouse_over_captured && !dragged_too_far) {
+  if (param.in_event_cb && !mouse_over_captured && !dragged_too_far) {
     // TODO: Maybe need to also pass along earlier exclusions?  Working okay for now though.
     if (!param.phys) {
       param.phys = {};
@@ -1349,11 +1526,14 @@ export function mouseUpEdge(param) {
     camera2d.virtualToDomPosParam(param.phys, pos_param);
     in_event.on('mouseup', param.phys, param.in_event_cb);
   }
-  return false;
+  return null;
 }
 
 export function mouseDownEdge(param) {
   param = param || {};
+  if (input_eaten_mouse || !param.in_event_cb && no_active_touches) {
+    return null;
+  }
   let pos_param = mousePosParam(param);
   let button = pos_param.button;
 
@@ -1376,7 +1556,7 @@ export function mouseDownEdge(param) {
     }
   }
 
-  if (param.in_event_cb && !input_eaten_mouse && !mouse_over_captured) {
+  if (param.in_event_cb && !mouse_over_captured) {
     // TODO: Maybe need to also pass along earlier exclusions?  Working okay for now though.
     if (!param.phys) {
       param.phys = {};
@@ -1385,13 +1565,16 @@ export function mouseDownEdge(param) {
     camera2d.virtualToDomPosParam(param.phys, pos_param);
     in_event.on('mousedown', param.phys, param.in_event_cb);
   }
-  return false;
+  return null;
 }
 
 // Completely consume any clicks or drags coming from a mouse down event in this
 // area - used to catch focus leaving an edit box without wanting to do what
 // a click would normally do.
 export function mouseConsumeClicks(param) {
+  if (no_active_touches) {
+    return;
+  }
   param = param || {};
   let pos_param = mousePosParam(param);
   let button = pos_param.button;
@@ -1412,6 +1595,9 @@ export function mouseConsumeClicks(param) {
 }
 
 export function drag(param) {
+  if (input_eaten_mouse || no_active_touches) {
+    return null;
+  }
   param = param || {};
   let pos_param = mousePosParam(param);
   let button = pos_param.button;
@@ -1419,7 +1605,9 @@ export function drag(param) {
 
   for (let touch_id in touches) {
     let touch_data = touches[touch_id];
-    if (!(button === ANY || button === touch_data.button) || touch_data.dispatched_drag) {
+    if (!(button === ANY || button === touch_data.button) || touch_data.dispatched_drag ||
+      touch_id === param.not_touch_id
+    ) {
       continue;
     }
     if (checkPos(touch_data.start_pos, pos_param)) {
@@ -1452,6 +1640,7 @@ export function drag(param) {
         start_time: touch_data.start_time,
         is_down_edge,
         down_time: touch_data.down_time,
+        touch_id,
       };
     }
   }
@@ -1460,6 +1649,9 @@ export function drag(param) {
 
 // a lot like drag(), refactor to share more?
 export function longPress(param) {
+  if (input_eaten_mouse || no_active_touches) {
+    return null;
+  }
   param = param || {};
   let pos_param = mousePosParam(param);
   let button = pos_param.button;
@@ -1510,6 +1702,9 @@ export function longPress(param) {
 }
 
 export function dragDrop(param) {
+  if (input_eaten_mouse || no_active_touches) {
+    return null;
+  }
   param = param || {};
   let pos_param = mousePosParam(param);
   let button = pos_param.button;
@@ -1537,6 +1732,9 @@ export function dragDrop(param) {
 }
 
 export function dragOver(param) {
+  if (input_eaten_mouse || no_active_touches) {
+    return null;
+  }
   param = param || {};
   let pos_param = mousePosParam(param);
   let button = pos_param.button;

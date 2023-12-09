@@ -6,6 +6,7 @@ const assert = require('assert');
 const { ChannelWorker } = require('./channel_worker.js');
 const { chunkedSend } = require('glov/common/chunked_send.js');
 const { canonical } = require('glov/common/cmd_parse.js');
+const { keyMetricsAddTagged } = require('./key_metrics.js');
 const { logEx } = require('./log.js');
 const { isPacket } = require('glov/common/packet.js');
 const { netDelayGet, netDelaySet } = require('glov/common/wscommon.js');
@@ -18,7 +19,6 @@ let permission_flags_map;
 
 let permission_flags;
 function applyCustomIds(ids, user_data_public) {
-  // FRVR - maybe generalize this
   delete ids.elevated;
   let perm = user_data_public?.permissions;
   for (let ii = 0; ii < permission_flags.length; ++ii) {
@@ -62,9 +62,10 @@ export class ClientWorker extends ChannelWorker {
 
   onLoginInternal(user_id, resp_data) {
     this.ids_base.user_id = user_id;
-    this.ids_base.display_name = resp_data.display_name;
+    this.ids_base.display_name = resp_data.public_data.display_name;
     this.log_user_id = user_id;
-    applyCustomIds(this.ids_base, resp_data);
+    applyCustomIds(this.ids_base, resp_data.public_data);
+    keyMetricsAddTagged('login', this.client.client_tags, 1);
   }
 
   onLogoutInternal() {

@@ -6,7 +6,11 @@ const engine = require('./engine.js');
 const { renderWidth, renderHeight } = engine;
 const perf = require('./perf.js');
 const settings = require('./settings.js');
-const textures = require('./textures.js');
+const {
+  TEXTURE_FORMAT,
+  textureCreateForCapture,
+  textureCreateForDepthCapture,
+} = require('./textures.js');
 
 let last_num_passes = 0;
 let num_passes = 0;
@@ -38,7 +42,7 @@ function getTemporaryTexture(w, h, possibly_fbo) {
     temp = temporary_textures[key] = { list: [], idx: 0 };
   }
   if (temp.idx >= temp.list.length) {
-    let tex = textures.createForCapture(`temp_${key}_${++last_temp_idx}`);
+    let tex = textureCreateForCapture(`temp_${key}_${++last_temp_idx}`);
     if (is_fbo) {
       tex.allocFBO(w, h);
     }
@@ -79,8 +83,8 @@ function bindTemporaryDepthbufferTexture(w, h) {
     temp = temporary_depthtextures[key] = { list: [], idx: 0 };
   }
   if (temp.idx >= temp.list.length) {
-    let tex = textures.createForDepthCapture(`temp_${key}_${++last_temp_idx}`,
-      settings.fbo_depth16 ? textures.format.DEPTH16 : textures.format.DEPTH24);
+    let tex = textureCreateForDepthCapture(`temp_${key}_${++last_temp_idx}`,
+      settings.fbo_depth16 ? TEXTURE_FORMAT.DEPTH16 : TEXTURE_FORMAT.DEPTH24);
     tex.allocDepth(w, h);
     let attachment = settings.fbo_depth16 ? gl.DEPTH_ATTACHMENT : gl.DEPTH_STENCIL_ATTACHMENT;
 
@@ -136,6 +140,10 @@ export function framebufferStart(opts) {
   assert(!cur_tex);
   assert(!cur_depth);
   let { width, height, viewport, final, clear, need_depth, clear_all, clear_color, force_tex } = opts;
+  if (!width) {
+    width = renderWidth();
+    height = renderHeight();
+  }
   ++num_passes;
   cur_depth = null;
   if (force_tex) {

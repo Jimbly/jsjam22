@@ -9,6 +9,10 @@ export function perfCounterAdd(key) {
   counters[key] = (counters[key] || 0) + 1;
 }
 
+export function perfCounterAddValue(key, value) {
+  counters[key] = (counters[key] || 0) + value;
+}
+
 export function perfCounterTick(dt, log) {
   countdown -= dt;
   if (countdown <= 0) {

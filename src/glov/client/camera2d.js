@@ -2,6 +2,7 @@
 // Released under MIT License: https://opensource.org/licenses/MIT
 /* eslint @typescript-eslint/no-shadow:off */
 
+const assert = require('assert');
 const engine = require('./engine.js');
 
 const { max, round } = Math;
@@ -50,6 +51,12 @@ export function virtualToCanvas(dst, src) {
   dst[0] = (src[0] - data[0]) * data[4];
   dst[1] = (src[1] - data[1]) * data[5];
 }
+export function transformX(x) {
+  return (x - data[0]) * data[4];
+}
+export function transformY(y) {
+  return (y - data[1]) * data[5];
+}
 
 export function canvasToVirtual(dst, src) {
   dst[0] = src[0] / data[4] + data[0];
@@ -67,6 +74,10 @@ function safeScreenHeight() {
 // Sets the 2D "camera" used to translate sprite positions to screen space.  Affects sprites queued
 //  after this call
 export function set(x0, y0, x1, y1, ignore_safe_area) {
+  assert(isFinite(x0));
+  assert(isFinite(y0));
+  assert(isFinite(x1));
+  assert(isFinite(y1));
   if (ignore_safe_area || render_width) {
     data[9] = data[0] = x0;
     data[10] = data[1] = y0;
@@ -124,22 +135,40 @@ export function screenAspect() {
 // Drawing area 0,0-w,h
 // But keep the aspect ratio of those things drawn to be correct
 // This may create a padding or margin on either top and bottom or sides of the screen
-// User users constant values in this range for consistent UI on all devices
+// User should use constant values in this range for consistent UI on all devices
 export function setAspectFixed(w, h) {
   let pa = render_width ? 1 : engine.pixel_aspect;
   let inv_aspect = h / pa / w;
   let inv_desired_aspect;
+  let screen_w;
+  let screen_h;
   if (render_width) {
-    inv_desired_aspect = render_height / render_width;
+    screen_w = render_width;
+    screen_h = render_height;
   } else {
-    inv_desired_aspect = 1 / screenAspect();
+    screen_w = safeScreenWidth();
+    screen_h = safeScreenHeight();
   }
+  inv_desired_aspect = screen_h / screen_w;
+  // ensure the left/top margin is integer screen pixels
+  // Note: the margin is, however, not integer virtual pixels, so anything
+  //   using an `integral` font and camera2d.x0()/etc will have artifacts
   if (inv_aspect > inv_desired_aspect) {
-    let margin = (h / pa / inv_desired_aspect - w) / 2;
-    set(-margin, 0, w + margin, h, false);
+    let virtual_w = h / pa / inv_desired_aspect;
+    let virtual_to_screen = screen_w / virtual_w;
+    let margin = virtual_w - w;
+    let left_margin_screen_px = round(margin * virtual_to_screen / 2);
+    let left_margin = left_margin_screen_px / virtual_to_screen;
+    let right_margin = margin - left_margin;
+    set(-left_margin, 0, w + right_margin, h, false);
   } else {
-    let margin = (w * pa * inv_desired_aspect - h) / 2;
-    set(0, -margin, w, h + margin, false);
+    let virtual_h = w * pa * inv_desired_aspect;
+    let virtual_to_screen = screen_h / virtual_h;
+    let margin = virtual_h - h;
+    let top_margin_screen_px = round(margin * virtual_to_screen / 2);
+    let top_margin = top_margin_screen_px / virtual_to_screen;
+    let bot_margin = margin - top_margin;
+    set(0, -top_margin, w, h + bot_margin, false);
   }
 }
 
@@ -186,10 +215,10 @@ export function shift(dx, dy) {
 export function calcMap(out, src_rect, dest_rect) {
   let cur_w = data[11] - data[9];
   let cur_h = data[12] - data[10];
-  let vx0 = (src_rect[0] - data[0]) / cur_w;
-  let vy0 = (src_rect[1] - data[1]) / cur_h;
-  let vx1 = (src_rect[2] - data[0]) / cur_w;
-  let vy1 = (src_rect[3] - data[1]) / cur_h;
+  let vx0 = (src_rect[0] - data[9]) / cur_w;
+  let vy0 = (src_rect[1] - data[10]) / cur_h;
+  let vx1 = (src_rect[2] - data[9]) / cur_w;
+  let vy1 = (src_rect[3] - data[10]) / cur_h;
   let vw = vx1 - vx0;
   let vh = vy1 - vy0;
   let dest_vw = dest_rect[2] - dest_rect[0];
@@ -207,9 +236,11 @@ export function setNormalized() {
 
 // Sets virtual viewport equal to (DPI-aware) screen pixels
 //   (generally a bad idea, will not scale well without lots of app work)
-export function setScreen() {
+export function setScreen(no_dpi_aware) {
   if (render_width) {
     set(0, 0, render_width, render_height);
+  } else if (no_dpi_aware) {
+    set(0, 0, safeScreenWidth(), safeScreenHeight());
   } else {
     set(0, 0, safeScreenWidth() / engine.dom_to_canvas_ratio, safeScreenHeight() / engine.dom_to_canvas_ratio);
   }
@@ -351,11 +382,15 @@ export function virtualToDom(dst, src) {
   }
 }
 
+let font_pixel_scale = 0.84; // approx for palanquin; use 0.970 for PerfectVGA
+export function setDOMFontPixelScale(scale) {
+  font_pixel_scale = scale;
+}
 export function virtualToFontSize(height) {
   if (render_width) {
-    return height / (data[6] * data[8]) * 0.84;
+    return height / (data[6] * data[8]) * font_pixel_scale;
   } else {
-    return height * data[5] / data[6] * 0.84;
+    return height * data[5] / data[6] * font_pixel_scale;
   }
 }
 

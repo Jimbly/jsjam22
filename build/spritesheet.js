@@ -27,8 +27,8 @@ Vec4.prototype[inspect.custom] = function () {
   return `vec4(${this.data.join(',')})`;
 };
 
-function vec4(a, b, c, d) {
-  return new Vec4(a, b, c, d);
+function vec4(an, ad, bn, bd, cn, cd, dn, dd) {
+  return new Vec4(`${an}/${ad}`, `${bn}/${bd}`, `${cn}/${cd}`, `${dn}/${dd}`);
 }
 
 function cmpFileKeys(a, b) {
@@ -36,7 +36,8 @@ function cmpFileKeys(a, b) {
 }
 
 module.exports = function (opts) {
-  const { name } = opts;
+  const { name, tile_horiz_regex, clamp_regex } = opts;
+  let pad = opts.pad || 0;
   function imgproc(job, done) {
     let files = job.getFiles();
 
@@ -110,18 +111,18 @@ module.exports = function (opts) {
           }
         }
         // Pack into output
-        if (x + img0.width > max_tex_size) {
+        if (x + img0.width + pad * 2 > max_tex_size) {
           x = 0;
           y += row_height;
           row_height = 0;
         }
-        row_height = max(row_height, img0.height);
-        img_data.x = x;
-        img_data.y = y;
-        x += img0.width;
+        row_height = max(row_height, img0.height + pad * 2);
+        img_data.x = x + pad;
+        img_data.y = y + pad;
+        x += img0.width + pad * 2;
         maxx = max(maxx, x);
       }
-      y += row_height;
+      y += row_height + pad * 2;
       maxy = y;
       if (any_error) {
         return void done();
@@ -144,7 +145,7 @@ module.exports = function (opts) {
       let { width: imgw, height: imgh } = imgs[0];
       runtime_data.tiles[img_name] = ii;
       runtime_data[`FRAME_${img_name.toUpperCase()}`] = ii;
-      runtime_data.uidata.rects.push(vec4(x / width, y / height, (x + imgw) / width, (y + imgh) / height));
+      runtime_data.uidata.rects.push(vec4(x, width, y, height, (x + imgw), width, (y + imgh), height));
       runtime_data.uidata.aspect.push(imgw/imgh);
 
       for (let idx = 0; idx < imgs.length; ++idx) {
@@ -157,10 +158,25 @@ module.exports = function (opts) {
         if (imgw !== imgh) {
           all_square = false;
         }
-        for (let yy = 0; yy < imgh; ++yy) {
-          for (let xx = 0; xx < imgw; ++xx) {
+        let clamp = clamp_regex && clamp_regex.test(img_name);
+        let clamp_vert = clamp || tile_horiz_regex && tile_horiz_regex.test(img_name);
+        let clamp_horiz = clamp;
+        for (let yy = -pad; yy < imgh + pad; ++yy) {
+          let yyy;
+          if (clamp_vert) {
+            yyy = yy < 0 ? 0 : yy >= imgh ? imgh - 1 : yy;
+          } else {
+            yyy = (yy + imgh) % imgh;
+          }
+          for (let xx = -pad; xx < imgw + pad; ++xx) {
+            let xxx;
+            if (clamp_horiz) {
+              xxx = xx < 0 ? 0 : xx >= imgw ? imgh - 1 : xx;
+            } else {
+              xxx = (xx + imgw) % imgw;
+            }
             for (let jj = 0; jj < 4; ++jj) {
-              outdata[(x + xx + (y + yy) * width) * 4 + jj] = indata[(xx + yy * imgw) * 4 + jj];
+              outdata[(x + xx + (y + yy) * width) * 4 + jj] = indata[(xxx + yyy * imgw) * 4 + jj];
             }
           }
         }
@@ -190,6 +206,9 @@ module.exports = function (opts) {
       preamble,
       postamble,
       cmpFileKeys,
+      pad,
+      tile_horiz_regex,
+      clamp_regex,
     ],
   };
 };

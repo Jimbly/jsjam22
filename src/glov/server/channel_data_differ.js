@@ -1,25 +1,12 @@
 const assert = require('assert');
 const { max } = Math;
+const { typeof2 } = require('glov/common/differ');
 const { clone } = require('glov/common/util.js');
-
-function typeof2(obj) {
-  if (obj === null) {
-    return 'null';
-  }
-  let plain = typeof obj;
-  if (!obj) {
-    return plain; // undefined, number, string
-  }
-  if (plain === 'object' && Array.isArray(obj)) {
-    return 'array';
-  }
-  return plain; // object, number, string
-}
 
 function walk(differ, worker, path_pre, data1, data2) {
   let type = typeof2(data1);
   if (type !== typeof2(data2)) {
-    // Types changed, probably one is now undefined
+    // Types changed, probably one is now undefined or null
     worker.setChannelDataBatched(path_pre, data2);
     return;
   }
@@ -46,7 +33,7 @@ function walk(differ, worker, path_pre, data1, data2) {
       worker.setChannelDataBatched(`${path_pre}.length`, data2.length);
     }
   } else {
-    // string, number, null
+    // string, number, boolean
     if (data1 !== data2) {
       worker.setChannelDataBatched(path_pre, data2);
     }

@@ -1,11 +1,18 @@
 /* eslint-disable import/order */
 const camera2d = require('./camera2d.js');
 const engine = require('./engine.js');
+const { renderNeeded } = engine;
 const glov_font = require('./font.js');
 const { min } = Math;
 const { scrollAreaCreate } = require('./scroll_area.js');
 const ui = require('./ui.js');
+const { uiButtonHeight } = require('./ui.js');
 const net = require('./net.js');
+const {
+  dataErrorEx,
+  dataErrorQueueClear,
+  dataErrorQueueGet,
+} = require('glov/common/data_error.js');
 const { plural } = require('glov/common/util.js');
 const { vec4 } = require('glov/common/vmath.js');
 
@@ -16,10 +23,19 @@ Z.BUILD_ERRORS = Z.BUILD_ERRORS || 9900;
 
 function onGBState(state) {
   gbstate = state;
+  renderNeeded();
 }
 
 function onServerError(err) {
   server_error = err;
+  renderNeeded();
+}
+
+function onDataErrors(err_list) {
+  for (let ii = 0; ii < err_list.length; ++ii) {
+    dataErrorEx(err_list[ii]);
+  }
+  renderNeeded();
 }
 
 const PAD = 4;
@@ -33,7 +49,8 @@ const color_line = vec4(1,1,1,1);
 const strip_ansi = /\u001b\[(?:[0-9;]*)[0-9A-ORZcf-nqry=><]/g;
 let scroll_area;
 function buildUITick() {
-  if (!gbstate && !server_error) {
+  let data_errors = dataErrorQueueGet();
+  if (!gbstate && !server_error && !data_errors.length) {
     return;
   }
   const x0 = camera2d.x0() + PAD;
@@ -44,7 +61,7 @@ function buildUITick() {
   let x = x0;
   let y = y0;
 
-  let error_count = (gbstate?.error_count || 0) + (server_error ? 1 : 0);
+  let error_count = (gbstate?.error_count || 0) + (server_error ? 1 : 0) + data_errors.length;
   let warning_count = gbstate?.warning_count || 0;
   title_font.drawSizedAligned(style_title, x, y, z, font_height, font.ALIGN.HCENTERFIT, w, 0,
     `${error_count} ${plural(error_count, 'error')}, ` +
@@ -124,17 +141,24 @@ function buildUITick() {
     printLine('Server error', server_error);
   }
 
+  for (let ii = 0; ii < data_errors.length; ++ii) {
+    let { msg } = data_errors[ii];
+    x = 0;
+    printLine('Data error', msg);
+  }
+
   scroll_area.end(y);
   y = scroll_y_start + min(max_h, y);
 
   if (ui.buttonText({
-    x: x0 + w - ui.button_height,
+    x: x0 + w - uiButtonHeight(),
     y: y0, z: Z.BUILD_ERRORS + 1,
-    w: ui.button_height,
+    w: uiButtonHeight(),
     text: 'X',
   })) {
     gbstate = null;
     server_error = null;
+    dataErrorQueueClear();
   }
 
   ui.panel({
@@ -149,6 +173,7 @@ export function buildUIStartup() {
   if (net.client && engine.DEBUG) {
     net.client.onMsg('gbstate', onGBState);
     net.client.onMsg('server_error', onServerError);
+    net.client.onMsg('data_errors', onDataErrors);
     net.subs.on('connect', function () {
       let pak = net.client.pak('gbstate_enable');
       pak.writeBool(true);

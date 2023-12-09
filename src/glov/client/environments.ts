@@ -1,6 +1,7 @@
 import assert from 'assert';
-import { setAbilityReload } from './client_config';
-import { cmd_parse } from './cmds';
+import * as cmd_parse_mod from 'glov/common/cmd_parse';
+import { ErrorCallback } from 'glov/common/types';
+import { setAbilityReloadUpdates } from './client_config';
 import { netForceDisconnect } from './net';
 import * as urlhash from './urlhash';
 
@@ -18,7 +19,7 @@ let link_base: string;    // Link base like http://foo.bar/ (with trailing slash
 let api_path: string;     // API base like http://foo.bar/api/ (with trailing slash)
 let texture_base: string; // Texture base like http://foo.bar/ (with trailing slash)
 
-function applyEnvironment() {
+function applyEnvironment(): void {
   link_base = (current_environment && current_environment.link_base) || urlhash.getURLBase();
   api_path = (current_environment && current_environment.api_path) || `${link_base}api/`;
   texture_base = link_base.replace('//localhost:', '//127.0.0.1:');
@@ -35,7 +36,7 @@ export function setCurrentEnvironment(environment_name: string | undefined | nul
   current_environment = (environment_name && all_environments[environment_name]) || default_environment;
   if (current_environment !== prev_environment) {
     applyEnvironment();
-    setAbilityReload(false);
+    setAbilityReloadUpdates(false);
     netForceDisconnect();
   }
 }
@@ -52,6 +53,7 @@ export function getExternalTextureURL(url: string): string {
 
 export function environmentsInit<T extends EnvironmentConfig>(
   environments: Array<T>,
+  cmd_parse: ReturnType<typeof cmd_parse_mod.create> | null,
   default_environment_name?: string | undefined | null,
 ): void {
   all_environments = {};
@@ -71,14 +73,25 @@ export function environmentsInit<T extends EnvironmentConfig>(
   if (!all_names.some((name) => name.toLowerCase() === 'default')) {
     all_names.push('default');
   }
-  cmd_parse.registerValue('environment', {
-    type: cmd_parse.TYPE_STRING,
-    help: 'Display or set the current client environment',
-    usage: 'Display the current client environment\n  Usage: /environment\n' +
-      `Set the current client environment (${all_names.join(', ')})\n  Usage: /environment <environment_name>`,
-    label: 'Environment',
-    get: () => JSON.stringify(getCurrentEnvironment() || 'default', null, 2),
-    set: setCurrentEnvironment,
-    access_show: ['sysadmin'],
-  });
+  if (cmd_parse) {
+    cmd_parse.registerValue('environment', {
+      type: cmd_parse.TYPE_STRING,
+      help: 'Display or set the current client environment',
+      usage: 'Display the current client environment\n  Usage: /environment\n' +
+        `Set the current client environment (${all_names.join(', ')})\n  Usage: /environment <environment_name>`,
+      label: 'Environment',
+      get: () => JSON.stringify(getCurrentEnvironment() || 'default', null, 2),
+      set: setCurrentEnvironment,
+      access_show: ['sysadmin'],
+    });
+
+    cmd_parse.register({
+      cmd: 'env',
+      help: 'Alias for /environment',
+      access_show: ['sysadmin'],
+      func: function (str: string, resp_func: ErrorCallback<string>) {
+        cmd_parse.handle(this, `environment ${str}`, resp_func);
+      },
+    });
+  }
 }

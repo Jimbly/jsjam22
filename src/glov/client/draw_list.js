@@ -2,6 +2,7 @@
 // Released under MIT License: https://opensource.org/licenses/MIT
 
 const assert = require('assert');
+const { dynGeomDrawAlpha, dynGeomDrawOpaque } = require('./dyn_geom.js');
 const engine = require('./engine.js');
 const { mat_vp } = engine;
 
@@ -34,6 +35,10 @@ export function alphaDraw() {
     list[ii][1].drawAlpha(list[ii][0]);
   }
   list.length = 0;
+  dynGeomDrawAlpha(); // TODO: merge sort with `list`
+
+  gl.depthMask(true);
+  gl.disable(gl.BLEND);
 }
 
 export function alphaDrawListSize() {
@@ -63,4 +68,5 @@ export function opaqueDraw() {
     opaque_list[ii]();
   }
   opaque_list.length = 0;
+  dynGeomDrawOpaque();
 }

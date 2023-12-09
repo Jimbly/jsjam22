@@ -1,45 +1,34 @@
 // Portions Copyright 2019 Jimb Esser (https://github.com/Jimbly/)
 // Released under MIT License: https://opensource.org/licenses/MIT
 
-/* eslint-disable import/order */
-const assert = require('assert');
-const {
+import assert from 'assert';
+import * as crypto from 'crypto';
+import * as fs from 'fs';
+import {
+  MAX_CLIENT_UPLOAD_SIZE,
   chunkedReceiverCleanup,
   chunkedReceiverFinish,
   chunkedReceiverInit,
   chunkedReceiverOnChunk,
   chunkedReceiverStart,
-  MAX_CLIENT_UPLOAD_SIZE,
-} = require('glov/common/chunked_send.js');
-const client_worker = require('./client_worker.js');
-const { channelServerPak, channelServerSend, quietMessage } = require('./channel_server.js');
-const crypto = require('crypto');
-const { regex_valid_username } = require('./default_workers.js');
-const { logDumpJSON, logSubscribeClient, logUnsubscribeClient } = require('./log.js');
-const fs = require('fs');
-const { isPacket } = require('glov/common/packet.js');
-const { logdata, merge } = require('glov/common/util.js');
-const { isProfane, profanityCommonStartup } = require('glov/common/words/profanity_common.js');
-const metrics = require('./metrics.js');
-const { perfCounterAdd } = require('glov/common/perfcounters.js');
-const random_names = require('./random_names.js');
-// const {
-//   appleSignInInit,
-//   appleSignInValidateToken,
-// } = require('./signin_with_apple_validator.js');
-const {
-  facebookGetASIDFromLoginDataAsync,
-  facebookGetPayloadFromSignedData,
-  facebookGetPlayerIdFromASIDAsync,
-  facebookGetUserFieldsFromASIDAsync,
-  facebookUtilsInit,
-} = require('./facebook_utils.js');
-const {
-  // ID_PROVIDER_APPLE,
-  ID_PROVIDER_FB_GAMING,
-  ID_PROVIDER_FB_INSTANT,
-} = require('glov/common/enums.js');
-
+} from 'glov/common/chunked_send';
+import { ERR_NO_USER_ID, ERR_UNAUTHORIZED } from 'glov/common/external_users_common';
+import { isPacket } from 'glov/common/packet';
+import { perfCounterAdd, perfCounterAddValue } from 'glov/common/perfcounters';
+import { unicode_replacement_chars } from 'glov/common/replacement_chars';
+import { logdata, merge } from 'glov/common/util';
+import {
+  isProfane,
+  profanityCommonStartup,
+  profanitySetReplacementChars,
+} from 'glov/common/words/profanity_common';
+import { channelServerPak, channelServerSend, quietMessage } from './channel_server';
+import * as client_worker from './client_worker';
+import { regex_valid_username } from './default_workers';
+import { externalUsersValidateLogin } from './external_users_validation';
+import { logDumpJSON, logSubscribeClient, logUnsubscribeClient } from './log';
+import { metricsStats } from './metrics';
+import * as random_names from './random_names';
 
 // Note: this object is both filtering wsclient -> wsserver messages and client->channel messages
 let ALLOWED_DURING_RESTART = Object.create(null);
@@ -49,6 +38,22 @@ ALLOWED_DURING_RESTART.channel_msg = true; // filtered at lower level
 ALLOWED_DURING_RESTART.chat = true;
 
 let channel_server;
+
+function defaultUserIdMappingHandler(client_channel, valid_login_data, resp_func) {
+  client_channel.sendChannelMessage(
+    'idmapper.idmapper',
+    'id_map_get_id',
+    { provider: valid_login_data.provider, provider_id: valid_login_data.external_id },
+    (err, result) => resp_func(err, result?.user_id));
+}
+
+let external_users_id_mapping_handlers = {};
+export function setExternalUserIdMapper(provider_id, handler) {
+  external_users_id_mapping_handlers[provider_id] = handler;
+}
+export function getExternalUserIdMapper(provider_id) {
+  return external_users_id_mapping_handlers[provider_id] || defaultUserIdMappingHandler;
+}
 
 
 function restartFilter(client, msg, data) {
@@ -189,6 +194,14 @@ function onChannelMsg(client, data, resp_func) {
   }
   let client_channel = client.client_channel;
 
+  let debug_name = `cm:${channel_id.split('.')[0]}.${typeof msg === 'number' ? 'ack' : msg}`;
+  // re-attribute the packet size to the more detailed perf counter
+  let { pkg_log_last_size } = channel_server.ws_server;
+  assert(pkg_log_last_size);
+  perfCounterAddValue('net.recv_bytes.channel_msg', -pkg_log_last_size);
+  perfCounterAddValue(`net.recv_bytes.${debug_name}`, pkg_log_last_size);
+  perfCounterAdd(debug_name);
+
   if (!client_channel.isSubscribedTo(channel_id)) {
     if (channel_server.clientCanSendDirectWithoutSubscribe(channel_id)) {
       // let it through
@@ -228,7 +241,6 @@ function onChannelMsg(client, data, resp_func) {
       client.send('error', err);
     }
   };
-  perfCounterAdd(`cm.${channel_id.split('.')[0]}.${typeof msg === 'number' ? 'ack' : msg}`);
   resp_func.expecting_response = Boolean(old_resp_func);
   client_channel.ids = client_channel.ids_direct;
   channelServerSend(client_channel, channel_id, msg, null, payload, resp_func, true); // quiet since we already logged
@@ -292,45 +304,6 @@ function validUsername(user_id, allow_admin) {
   return true;
 }
 
-function userIdExists(client_channel, user_id, resp_func) {
-  /*
-  // Needs: const dot_prop = require('glov/common/dot-prop.js');
-  const store_path = `user/user.${user_id}`;
-  client_channel.channel_server.ds_store_meta.getAsync(store_path, {}, function (err, response) {
-    if (err) {
-      resp_func(false);
-    } else {
-      let hasPass = dot_prop.get(response, 'private.password', false);
-      let isExternal = dot_prop.get(response, 'private.external', false);
-      resp_func(hasPass || isExternal);
-    }
-  });
-  */
-  client_channel.sendChannelMessage(`user.${user_id}`, 'user_ping', null, (err) => {
-    if (err) {
-      client_channel.logCtx('info', 'Unable to send user_ping - the user does not exist');
-      resp_func(false);
-    } else {
-      resp_func(true);
-    }
-  });
-}
-
-function getMappedUserIdFromProviderId(client_channel, provider, provider_id, resp_func) {
-  client_channel.sendChannelMessage('idmapper.idmapper', 'id_map_get_id',
-    { provider, provider_id }, (err, result) => resp_func(err, result?.user_id));
-}
-
-function getOrCreateMappedUserIdFromProviderId(client_channel, provider, provider_id, resp_func) {
-  client_channel.sendChannelMessage('idmapper.idmapper', 'id_map_get_create_id',
-    { provider, provider_id }, (err, result) => resp_func(err, result?.user_id));
-}
-
-function associateProviderIdToMappedUserId(client_channel, provider, provider_id, user_id, resp_func) {
-  client_channel.sendChannelMessage('idmapper.idmapper', 'id_map_associate_ids',
-    { provider, provider_id, user_id }, resp_func);
-}
-
 function handleLoginResponse(login_message, client, user_id, resp_func, err, resp_data) {
   let client_channel = client.client_channel;
   assert(client_channel);
@@ -341,6 +314,8 @@ function handleLoginResponse(login_message, client, user_id, resp_func, err, res
     return resp_func('Already logged in');
   }
 
+  let first_session;
+  let email;
   if (err) {
     client_channel.logCtx('info', `${login_message} failed: ${err}`);
   } else {
@@ -355,11 +330,22 @@ function handleLoginResponse(login_message, client, user_id, resp_func, err, res
 
     // Always subscribe client to own user
     onSubscribe(client, `user.${user_id}`);
+
+    first_session = resp_data.first_session;
+    email = resp_data.email;
   }
-  return resp_func(err, client_channel.ids); // user_id and display_name
+
+  return resp_func(err, {
+    first_session,
+    email,
+    user_id: client_channel.ids.user_id,
+    display_name: client_channel.ids.display_name,
+  });
 }
 
-function channelServerExternalLoginSend(client, provider, provider_id, user_id, display_name, resp_func) {
+function channelServerExternalLoginSend(client, provider, provider_ids, user_id, display_name, resp_func) {
+  assert(provider_ids);
+
   let login_message = `login_${provider}`;
   let client_channel = client.client_channel;
   assert(client_channel);
@@ -367,7 +353,7 @@ function channelServerExternalLoginSend(client, provider, provider_id, user_id, 
   client_channel.logCtx('info', `${login_message} ${user_id} success`);
   return client_channel.sendChannelMessage(`user.${user_id}`, 'login_external', {
     provider,
-    provider_id,
+    provider_ids,
     display_name,
     ip: client.addr,
     ua: client.user_agent,
@@ -395,312 +381,57 @@ function onLogin(client, data, resp_func) {
   }, handleLoginResponse.bind(null, 'login', client, user_id, resp_func));
 }
 
-function mapValidFacebookIds(client, login_provider, login_id, asid, player_id, display_name, resp_func) {
+function onLoginExternal(client, data, cb) {
   let client_channel = client.client_channel;
-  assert(player_id);
+  assert(client_channel);
 
-  // Check if the user is already created with a prefixed id (used before the mapped ids were introduced)
-  let legacy_instant_user_id = `fb$${player_id}`;
-  userIdExists(client_channel, legacy_instant_user_id, (legacy_instant_user_id_exists) => {
-    function handleIdAssociation(provider, provider_id, user_id) {
-      assert(!legacy_instant_user_id_exists || user_id === legacy_instant_user_id);
+  let { provider, validation_data, display_name } = data;
+  if (!(
+    provider && typeof provider === 'string' &&
+    validation_data && typeof validation_data === 'string'
+  )) {
+    client_channel.logCtx('error', `login_external invalid data ${logdata(data)}`);
+    return void cb('ERR_INVALID_DATA');
+  }
 
-      associateProviderIdToMappedUserId(client_channel, provider, provider_id, user_id, (err, success) => {
-        if (err || !success) {
-          err = err || 'Unknown error occurred when trying to associate a provider id to a user id';
-          return void resp_func(err);
-        } else if (!client.connected) {
-          return void resp_func('ERR_DISCONNECTED');
-        }
-        channelServerExternalLoginSend(client, login_provider, login_id, user_id, display_name, resp_func);
-      });
-    }
-    function handleBothIdAssociations(user_id) {
-      assert(!legacy_instant_user_id_exists || user_id === legacy_instant_user_id);
+  client_channel.logCtx('info', `login_external ${provider} ${JSON.stringify(data)}`);
 
-      associateProviderIdToMappedUserId(client_channel, ID_PROVIDER_FB_GAMING, asid, user_id, (err, success) => {
-        if (err || !success) {
-          err = err || 'Unknown error occurred when trying to associate a provider id to a user id';
-          return void resp_func(err);
-        }
-        handleIdAssociation(ID_PROVIDER_FB_INSTANT, player_id, user_id);
-      });
-    }
+  display_name = display_name ? String(display_name) : undefined;
 
+  externalUsersValidateLogin(provider, validation_data, (err, valid_login_data) => {
     if (!client.connected) {
-      return void resp_func('ERR_DISCONNECTED');
+      return void cb('ERR_DISCONNECTED');
+    } else if (err) {
+      client_channel.logCtx('error', `login_external ${provider} validation error: ${err}`);
+      return void cb(ERR_UNAUTHORIZED);
     }
+    assert(valid_login_data);
+    let external_user_id = valid_login_data.external_id;
+    assert(external_user_id);
 
-    // If no app-scoped user id exists, then there is no Facebook Gaming user registered yet,
-    // so we need to associate the legacy user id if it exists, or get-or-create a new user
-    // having only the Facebook Instant mapping
-    if (!asid) {
-      const provider = ID_PROVIDER_FB_INSTANT;
-      if (legacy_instant_user_id_exists) {
-        handleIdAssociation(provider, player_id, legacy_instant_user_id);
-      } else {
-        getOrCreateMappedUserIdFromProviderId(client_channel, provider, player_id, (err, user_id) => {
-          if (err) {
-            return void resp_func(err);
-          } else if (!client.connected) {
-            return void resp_func('ERR_DISCONNECTED');
-          }
-          assert(user_id);
-          channelServerExternalLoginSend(client, login_provider, login_id, user_id, display_name, resp_func);
-        });
-      }
-      return;
-    }
-
-    // Note: An extra (redundant) request is made to the database that would not be necessary, but this only
-    // happens on new user id creation, and this way the flow for both FB gaming and FB instant can be cleaner
-    getMappedUserIdFromProviderId(client_channel, ID_PROVIDER_FB_GAMING, asid, (err, user_id_gaming) => {
-      if (err) {
-        return void resp_func(err);
-      } else if (!client.connected) {
-        return void resp_func('ERR_DISCONNECTED');
-      }
-      getMappedUserIdFromProviderId(client_channel, ID_PROVIDER_FB_INSTANT, player_id, (err, user_id_instant) => {
-        if (err) {
-          return void resp_func(err);
-        } else if (!client.connected) {
-          return void resp_func('ERR_DISCONNECTED');
-        }
-
-        if (user_id_gaming && user_id_instant) {
-          client_channel.logCtx('error', 'Found both user_id_gaming and user_id_instant',
-            { login_provider, login_id, asid, player_id, legacy_instant_user_id_exists });
-          assert(false);
-        }
-
-        // If a user already exists for one of the logins, then the other login mapping is missing,
-        // so it needs to be associated with the same user id
-        if (user_id_gaming || user_id_instant) {
-          let user_id = user_id_gaming || user_id_instant;
-          let missing_provider = user_id_gaming ? ID_PROVIDER_FB_INSTANT : ID_PROVIDER_FB_GAMING;
-          let missing_provider_id = user_id_gaming ? player_id : asid;
-          handleIdAssociation(missing_provider, missing_provider_id, user_id);
-          return;
-        }
-
-        if (legacy_instant_user_id_exists) {
-          handleBothIdAssociations(legacy_instant_user_id);
-        } else {
-          getOrCreateMappedUserIdFromProviderId(client_channel, ID_PROVIDER_FB_GAMING, asid, (err, user_id) => {
-            if (err) {
-              return void resp_func(err);
-            }
-            assert(user_id);
-            handleIdAssociation(ID_PROVIDER_FB_INSTANT, player_id, user_id);
-          });
-        }
-      });
-    });
-  });
-}
-
-function onLoginFacebookInstant(client, data, resp_func) {
-  const provider = ID_PROVIDER_FB_INSTANT;
-  let client_channel = client.client_channel;
-  assert(client_channel);
-
-  client_channel.logCtx('info', `login_${provider} ${logdata(data)}`);
-
-  // Validate login credentials
-  let signed_data = data.signature;
-  if (!signed_data) {
-    metrics.add(`login_${provider}_auth_error`, 1);
-    client_channel.logCtx('error', `login_${provider} auth failed due to missing signature`);
-    return void resp_func('Auth Failed');
-  }
-  let payload = facebookGetPayloadFromSignedData(signed_data);
-  if (!payload || !payload.player_id) {
-    metrics.add(`login_${provider}_auth_error`, 1);
-    client_channel.logCtx('error', `login_${provider} auth failed due to bad signature`);
-    return void resp_func('Auth Failed');
-  }
-
-  getMappedUserIdFromProviderId(client_channel, provider, payload.player_id, (err, user_id) => {
-    if (err) {
-      return void resp_func(err);
-    } else if (!client.connected) {
-      return void resp_func('ERR_DISCONNECTED');
-    }
-
-    let display_name = data.display_name;
-
-    if (user_id) {
-      return void channelServerExternalLoginSend(client, provider, payload.player_id, user_id, display_name, resp_func);
-    }
-
-    let asid = data.asid;
-    if (!asid) {
-      metrics.add(`login_${provider}_no_asid_error`, 1);
-      client_channel.logCtx('error', `login_${provider} auth failed due to missing asid`);
-      return void resp_func('Auth Failed');
-    }
-
-    facebookGetPlayerIdFromASIDAsync(asid, (err, player_id) => {
-      if (err || !player_id) {
-        err = err || 'No player id available';
-        metrics.add(`login_${provider}_graph_playerid_error`, 1);
-        client_channel.logCtx('error',
-          `login_${provider} failure in obtaining the player id for ASID ${asid}: ${err}`);
-        // Due to a Facebook bug, we may not be able to get the player id from the ASID.
-        // Since the the user is correctly authenticated with the player id, so we will ignore the ASID and proceed.
-        client_channel.logCtx('warn',
-          `login_${provider} ignoring app-scoped user id due to not being able to obtain player id from it`);
-        asid = null;
-      } else if (player_id !== payload.player_id) {
-        metrics.add(`login_${provider}_playerid_mismatch_error`, 1);
-        client_channel.logCtx('error',
-          `login_${provider} player id ${player_id} gotten from ASID ${asid}` +
-          ` differs from the login player id ${payload.player_id} (possible spoofing attempt)`);
-        return void resp_func('Auth Failed');
-      } else {
-        metrics.add(`login_${provider}_valid`, 1);
-      }
-
+    let userIdMappingHandler = getExternalUserIdMapper(provider);
+    userIdMappingHandler(client_channel, valid_login_data, (err, user_id, providers_ids) => {
       if (!client.connected) {
-        return void resp_func('ERR_DISCONNECTED');
+        return void cb('ERR_DISCONNECTED');
       }
-
-      mapValidFacebookIds(client, provider, payload.player_id, asid, payload.player_id, display_name, resp_func);
-    });
-  });
-}
-
-function onLoginFacebookGaming(client, data, resp_func) {
-  const provider = ID_PROVIDER_FB_GAMING;
-  let client_channel = client.client_channel;
-  assert(client_channel);
-
-  client_channel.logCtx('info', `login_${provider} ${logdata(data)}`);
-
-  facebookGetASIDFromLoginDataAsync(data, function (err, asid) {
-    if (err || !asid) {
-      err = err || 'No app-scoped user id';
-      metrics.add(`login_${provider}_auth_error`, 1);
-      client_channel.logCtx('error', `login_${provider} auth failed due to ${err}`);
-      return void resp_func('Auth Failed');
-    } else if (!client.connected) {
-      return void resp_func('ERR_DISCONNECTED');
-    }
-
-    getMappedUserIdFromProviderId(client_channel, provider, asid, (err, user_id) => {
       if (err) {
-        return void resp_func(err);
-      } else if (!client.connected) {
-        return void resp_func('ERR_DISCONNECTED');
+        return void cb(err);
+      }
+      if (!user_id) {
+        return void cb(ERR_NO_USER_ID);
       }
 
-      function queryUserDisplayName(user_data_cb) {
-        // Note: These calls could be done as a single call together with the facebookGetPlayerIdFromASIDAsync,
-        // but the whole call might fail if one of the fields is missing or if there is no player id associated
-        // with the user yet (this happens possibly due to a Facebook bug), thus extra calls are needed.
-        facebookGetUserFieldsFromASIDAsync(asid, 'first_name', (err, first_name_result) => {
-          let display_name = null;
-
-          if (err) {
-            client_channel.logCtx('info', `login_${provider} error while obtaining user's first_name: ${err}`);
-          } else {
-            display_name = first_name_result?.first_name;
-            if (display_name) {
-              // If the first_name exists, we don't need to query for the name
-              return void user_data_cb(display_name);
-            }
-          }
-
-          facebookGetUserFieldsFromASIDAsync(asid, 'name', (err, name_result) => {
-            if (err) {
-              client_channel.logCtx('info', `login_${provider} error while obtaining user's name: ${err}`);
-            } else {
-              display_name = name_result?.name;
-            }
-            return void user_data_cb(display_name);
-          });
-        });
+      // Handle the case where this function is not called with extra providers' ids
+      if (!providers_ids) {
+        providers_ids = {};
       }
+      assert(!providers_ids[provider] || providers_ids[provider] === external_user_id);
+      providers_ids[provider] = external_user_id;
 
-      if (user_id) {
-        // Note: We need to check if the user exists in order to avoid a potential racing condition:
-        // On concurrent requests happening on the first login, the user id might be mapped but the user
-        // might not have been created yet, thus not having a display name associated.
-        // In order to avoid several unnecessary calls that are needed to get the display name, since that
-        // is only necessary for new users creation, first we check if the user is already created.
-        userIdExists(client_channel, user_id, (user_id_exists) => {
-          if (!client.connected) {
-            return void resp_func('ERR_DISCONNECTED');
-          }
-          if (user_id_exists) {
-            channelServerExternalLoginSend(client, provider, asid, user_id, null, resp_func);
-          } else {
-            queryUserDisplayName((display_name) => {
-              if (!client.connected) {
-                return void resp_func('ERR_DISCONNECTED');
-              }
-              channelServerExternalLoginSend(client, provider, asid, user_id, display_name, resp_func);
-            });
-          }
-        });
-        return;
-      }
-
-      facebookGetPlayerIdFromASIDAsync(asid, (err, player_id) => {
-        if (err || !player_id) {
-          err = err || 'No player id available';
-          metrics.add(`login_${provider}_graph_playerid_error`, 1);
-          client_channel.logCtx('error',
-            `login_${provider} failure in obtaining the player id for ASID ${asid}: ${err}`);
-          return void resp_func('Auth Failed');
-        }
-        metrics.add(`login_${provider}_valid`, 1);
-
-        queryUserDisplayName((display_name) => {
-          if (!client.connected) {
-            return void resp_func('ERR_DISCONNECTED');
-          }
-          mapValidFacebookIds(client, provider, asid, asid, player_id, display_name, resp_func);
-        });
-      });
+      channelServerExternalLoginSend(client, provider, providers_ids, user_id, display_name, cb);
     });
   });
 }
-
-// function onLoginApple(client, data, resp_func) {
-//   const provider = ID_PROVIDER_APPLE;
-//   let client_channel = client.client_channel;
-//   assert(client_channel);
-
-//   client_channel.logCtx('info', `login_${provider} ${logdata(data)}`);
-
-//   let identity_token = data.loginCredentials.token;
-//   let apple_id = data.loginCredentials.userIdentifier;
-//   appleSignInValidateToken(client, identity_token, (err, result) => {
-//     if (err) {
-//       client_channel.logCtx('info', `login_${provider} auth failed`, identity_token, apple_id);
-//       return void resp_func('Apple Auth Failed - Invalid token');
-//     } else if (!client.connected) {
-//       return void resp_func('ERR_DISCONNECTED');
-//     }
-
-//     if (apple_id !== result.sub) {
-//       client_channel.logCtx('warn',
-//         `login_${provider} auth apple user id from client differs from token (possible spoofing attempt)`,
-//         result.sub, apple_id);
-//     }
-//     getOrCreateMappedUserIdFromProviderId(client_channel, provider, result.sub, (err, user_id) => {
-//       if (err) {
-//         return void resp_func(err);
-//       } else if (!client.connected) {
-//         return void resp_func('ERR_DISCONNECTED');
-//       }
-//       assert(user_id);
-//       let display_name = data.loginCredentials.user.name;
-//       channelServerExternalLoginSend(client, provider, result.sub, user_id, display_name, resp_func);
-//     });
-//   });
-// }
 
 function onUserCreate(client, data, resp_func) {
   let client_channel = client.client_channel;
@@ -819,7 +550,7 @@ function onProfile(client, data, resp_func) {
     if (err) {
       throw err;
     }
-    let uid = buf.toString('base64');
+    let uid = buf.toString('base64').replace(/[+/]/g, 'A');
     let log_data = {
       ...data,
       ...client_channel.ids,
@@ -830,6 +561,25 @@ function onProfile(client, data, resp_func) {
     client_channel.logCtx('info', 'Profile saved', { uid, file });
     resp_func(null, { id: uid });
   });
+}
+
+const LOAD_TIME_METRICS = [
+  'time_js_load',
+  'time_js_init',
+  'time_resource_load',
+  'time_total',
+];
+function onLoadMetrics(client, data, resp_func) {
+  if (!data) {
+    return void resp_func();
+  }
+  for (let ii = 0; ii < LOAD_TIME_METRICS.length; ++ii) {
+    let field = LOAD_TIME_METRICS[ii];
+    if (typeof data[field] === 'number') {
+      metricsStats(`clientload_${field}`, data[field]);
+    }
+  }
+  resp_func();
 }
 
 function onCmdParseAuto(client, pak, resp_func) {
@@ -848,10 +598,9 @@ function onCmdParseListClient(client, data, resp_func) {
 }
 
 export function init(channel_server_in) {
-  facebookUtilsInit();
-  // appleSignInInit();
   profanityCommonStartup(fs.readFileSync(`${__dirname}/../common/words/filter.gkg`, 'utf8'),
     fs.readFileSync(`${__dirname}/../common/words/exceptions.txt`, 'utf8'));
+  profanitySetReplacementChars(unicode_replacement_chars);
 
   channel_server = channel_server_in;
   let ws_server = channel_server.ws_server;
@@ -878,9 +627,7 @@ export function init(channel_server_in) {
   ws_server.onMsg('set_channel_data', onSetChannelData);
   ws_server.onMsg('channel_msg', onChannelMsg);
   ws_server.onMsg('login', onLogin);
-  ws_server.onMsg('login_facebook_instant', onLoginFacebookInstant);
-  ws_server.onMsg('login_facebook_gaming', onLoginFacebookGaming);
-  // ws_server.onMsg('login_apple', onLoginApple);
+  ws_server.onMsg('login_external', onLoginExternal);
   ws_server.onMsg('user_create', onUserCreate);
   ws_server.onMsg('logout', onLogOut);
   ws_server.onMsg('random_name', onRandomName);
@@ -892,6 +639,7 @@ export function init(channel_server_in) {
   ws_server.onMsg('cmd_parse_list_client', onCmdParseListClient);
   ws_server.onMsg('perf_fetch', onPerfFetch);
   ws_server.onMsg('profile', onProfile);
+  ws_server.onMsg('load_metrics', onLoadMetrics);
 
   ws_server.onMsg('upload_start', uploadOnStart);
   ws_server.onMsg('upload_chunk', uploadOnChunk);

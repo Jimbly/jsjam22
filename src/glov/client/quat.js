@@ -6,12 +6,12 @@
 
 // Source of some: https://github.com/toji/gl-matrix/blob/master/src/quat.js
 
-const { vec4 } = require('glov/common/vmath.js');
+const { rovec4, vec4 } = require('glov/common/vmath.js');
 const { acos, cos, sin, sqrt } = Math;
 
 const EPSILON = 0.000001;
 
-exports.unit_quat = vec4(0, 0, 0, -1);
+export const unit_quat = rovec4(0, 0, 0, -1);
 
 export function quat() {
   return vec4(0, 0, 0, -1);

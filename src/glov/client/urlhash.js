@@ -41,9 +41,10 @@ let params = {};
 let title_transformer;
 
 let page_base = (document.location.href || '').match(/^[^#?]+/)[0]; // remove search and anchor
-if (!page_base.endsWith('/')) { // e.g. http://foo.bar/index.html
-  page_base += '?';
-}
+// This used to be here, but doesn't make sense (why would it be `foo.com/file.html?` but not `foo.com/?`?
+// if (!page_base.endsWith('/')) { // e.g. http://foo.bar/index.html
+//   page_base += '?';
+// }
 // Removes index.html et all
 let url_base = page_base.replace(/[^/]*$/,'');
 let on_change = [];
@@ -82,7 +83,11 @@ let routes = [];
 
 function queryString() {
   let href = String(document.location);
-  return href.slice(page_base.length);
+  href = href.slice(page_base.length);
+  if (href.includes('#')) {
+    href = href.slice(0, href.indexOf('#'));
+  }
+  return href;
 }
 
 const regex_value = /[^\w]\w+=([^&]+)/;
@@ -267,14 +272,28 @@ export function onURLChange(cb) {
   on_url_change = cb;
 }
 
+let history_update_deferred = false;
+export function historyDeferUpdate(defer) {
+  history_update_deferred = defer;
+}
+
 let last_history_set_time = 0;
 let scheduled = false;
 let need_push_state = false;
 function updateHistoryCommit() {
   profilerStart('updateHistoryCommit');
+  if (history_update_deferred) {
+    setTimeout(updateHistoryCommit, 1000);
+    return void profilerStop();
+  }
   scheduled = false;
   last_history_set_time = Date.now();
-  let url = `${page_base}${last_history_str}`;
+  let mid = '';
+  if (!page_base.endsWith('/') && last_history_str && !last_history_str.startsWith('?')) {
+    // a page_base like `foo.com/index.html` and a route url like `user/foo`, delineate them
+    mid = '?';
+  }
+  let url = `${page_base}${mid}${last_history_str}`;
   if (url.endsWith('?')) {
     url = url.slice(0, -1);
   }
@@ -363,7 +382,7 @@ export function route(route_string) {
     keys.push(match);
     return '([^/&?]+)';
   });
-  let regex = new RegExp(`^${base}(?:$|\\?)`);
+  let regex = new RegExp(`^\\??${base}(?:$|\\?|#)`);
   routeEx({
     route_string,
     regex,
@@ -374,7 +393,7 @@ export function route(route_string) {
 // For a route that has no parameters, e.g. `foo.html`
 // Needs an associated key already registered, then set(key, '1') and set(key, '') enter and leave this route
 export function routeFixed(route_string, key) {
-  let regex = new RegExp(`^${route_string}(?:$|\\?)`);
+  let regex = new RegExp(`^\\??${route_string}(?:$|\\?|#)`);
   routeEx({
     route_string,
     regex,
@@ -387,7 +406,7 @@ export function register(opts) {
   assert(opts.key);
   assert(!params[opts.key]);
   opts.type = opts.type || TYPE_STRING;
-  let regex_search = `(?:[^\\w])${opts.key}=([^&]+)`;
+  let regex_search = `(?:[^\\w])${opts.key}=([^&#]+)`;
   let regex_type = '';
   if (opts.type === TYPE_SET) {
     regex_type = 'g';

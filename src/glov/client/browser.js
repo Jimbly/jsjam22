@@ -6,6 +6,7 @@ export let is_android = !is_windows_phone && ua.match(/android/i);
 export let is_webkit = ua.match(/WebKit/i);
 export let is_ios_safari = is_ios && is_webkit && !ua.match(/CriOS/i);
 export let is_firefox = ua.match(/Firefox/i);
+export let is_itch_app = String(window.location.protocol).indexOf('itch') !== -1; // Note: itch.io APP, not web site
 
 export let is_discrete_gpu = false;
 
@@ -19,7 +20,10 @@ function init() {
       let debug_info = gltest.getExtension('WEBGL_debug_renderer_info');
       if (debug_info) {
         let renderer_unmasked = gltest.getParameter(debug_info.UNMASKED_RENDERER_WEBGL);
-        is_discrete_gpu = Boolean(renderer_unmasked && renderer_unmasked.match(/nvidia|radeon/i));
+        is_discrete_gpu = Boolean(renderer_unmasked && (
+          renderer_unmasked.match(/nvidia|radeon/i) ||
+          renderer_unmasked.match(/apple gpu/i) && is_mac_osx && !is_ios
+        ));
       }
     }
   } catch (e) {

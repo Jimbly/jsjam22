@@ -28,9 +28,13 @@ export let stats = {
   draw_calls: 0,
   draw_calls_geom: 0,
   draw_calls_sprite: 0,
+  draw_calls_dyn: 0,
   tris: 0,
   verts: 0,
   sprites: 0,
+  dyn: 0,
+  sprite_sort_elems: 0,
+  sprite_sort_cmps: 0,
   font_calls: 0,
   font_params: 0,
 };
@@ -167,7 +171,7 @@ function getQuadIndexBuf(quad_count) {
   return quad_index_buf;
 }
 
-export function createIndices(idxs) {
+export function geomCreateIndices(idxs) {
   let ret = {
     ibo: gl.createBuffer(),
     ibo_size: idxs.length,
@@ -207,7 +211,7 @@ function formatInfo(format) {
   return format.info;
 }
 
-// format is [shaders.semantic.foo, gl.FLOAT/UNSIGNED_BYTE/etc, count, normalized]
+// format is [shaders.SEMANTIC.foo, gl.FLOAT/UNSIGNED_BYTE/etc, count, normalized]
 function Geom(format, verts, idxs, mode) {
   this.mode = mode || TRIANGLES;
   this.format = format;
@@ -467,6 +471,21 @@ GeomMultiQuads.prototype.draw = function () {
     this.geoms[ii].draw();
   }
 };
+GeomMultiQuads.prototype.drawSub = function (start, tri_count) {
+  for (let ii = 0; ii < this.geoms.length && tri_count; ++ii) {
+    let geom = this.geoms[ii];
+    let num_quads = geom.vert_count / 4;
+    if (start < num_quads * 6) {
+      let start_quad = start / 6;
+      let these = min(tri_count, (num_quads - start_quad) * 2);
+      geom.drawSub(start, these);
+      tri_count -= these;
+      start = 0;
+    } else {
+      start -= num_quads * 6;
+    }
+  }
+};
 GeomMultiQuads.prototype.dispose = function () {
   for (let ii = 0; ii < this.geoms.length; ++ii) {
     this.geoms[ii].dispose();
@@ -474,11 +493,11 @@ GeomMultiQuads.prototype.dispose = function () {
   this.geoms = null;
 };
 
-export function create(format, verts, idxs, mode) {
+export function geomCreate(format, verts, idxs, mode) {
   return new Geom(format, verts, idxs, mode);
 }
 
-export function createQuads(format, verts, fixed_size) {
+export function geomCreateQuads(format, verts, fixed_size) {
   let format_info = formatInfo(format);
   assert(fixed_size || verts instanceof Uint8Array); // only one handled by GeomMultiQuads for now
   let vert_count = verts.length / format_info.elem_count;
@@ -488,6 +507,11 @@ export function createQuads(format, verts, fixed_size) {
   return new Geom(format, verts, null, QUADS);
 }
 
-export function startup() {
+export function geomStartup() {
   // Nothing for now.
 }
+
+// Legacy APIs
+exports.createIndices = geomCreateIndices;
+exports.create = geomCreate;
+exports.createQuads = geomCreateQuads;

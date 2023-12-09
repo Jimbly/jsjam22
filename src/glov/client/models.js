@@ -14,12 +14,20 @@ const glb_parser = require('./glb/parser.js');
 const { ATTRIBUTE_TYPE_TO_COMPONENTS } = require('./glb/gltf-type-utils.js');
 const renderer = require('./engine.js');
 const { fetch } = require('./fetch.js');
-const shaders = require('./shaders.js');
-const textures = require('./textures.js');
+const {
+  SEMANTIC,
+  shaderCreate,
+  shadersBind,
+  shadersPrelink,
+} = require('./shaders.js');
+const { textureBind, textureLoad } = require('./textures.js');
 const { vec4 } = require('glov/common/vmath.js');
 const { webFSGetFile } = require('./webfs.js');
 
 export let load_count = 0;
+export function modelLoadCount() {
+  return load_count;
+}
 
 export let models = {};
 
@@ -27,9 +35,9 @@ export let default_vshader;
 export let default_fshader;
 
 function initShaders() {
-  default_vshader = shaders.create('shaders/default.vp');
-  default_fshader = shaders.create('shaders/default.fp');
-  shaders.prelink(default_vshader, default_fshader);
+  default_vshader = shaderCreate('shaders/default.vp');
+  default_fshader = shaderCreate('shaders/default.fp');
+  shadersPrelink(default_vshader, default_fshader);
 }
 
 function Model(url) {
@@ -93,7 +101,7 @@ Model.prototype.parse = function (glb_data) {
             wrap_s: sampler_def.wrapS,
             wrap_t: sampler_def.wrapT,
           };
-          texture = textures.load(params);
+          texture = textureLoad(params);
         }
       }
       let format = [];
@@ -105,7 +113,7 @@ Model.prototype.parse = function (glb_data) {
         if (skip_attr[attr]) {
           continue;
         }
-        assert(shaders.semantic[attr] !== undefined);
+        assert(SEMANTIC[attr] !== undefined);
         let accessor = glb_json.accessors[primitives.attributes[attr]];
         assert.equal(accessor.componentType, 5126); // F32
         let geom_format = gl.FLOAT;
@@ -117,7 +125,7 @@ Model.prototype.parse = function (glb_data) {
         } else {
           assert.equal(vert_count, my_vert_count);
         }
-        format.push([shaders.semantic[attr], geom_format, geom_count]);
+        format.push([SEMANTIC[attr], geom_format, geom_count]);
         let buffer = glb.getBuffer(accessor);
         buffers.push(buffer);
         bidx.push(0);
@@ -158,16 +166,24 @@ Model.prototype.parse = function (glb_data) {
   };
 };
 
-Model.prototype.draw = function (mat) {
+const default_shader_params = {
+  color: vec4(1, 1, 1, 1),
+};
+Model.prototype.draw = function (param) {
+  let {
+    mat,
+    vshader,
+    fshader,
+    shader_params,
+  } = param;
+  assert(mat); // old API was just a `mat` as a single param
   renderer.updateMatrices(mat); // before setting shader
-  shaders.bind(default_vshader, default_fshader, {
-    color: vec4(1, 1, 1, 1),
-  });
+  shadersBind(vshader || default_vshader, fshader || default_fshader, shader_params || default_shader_params);
   let objs = this.data.objs;
   for (let ii = 0; ii < objs.length; ++ii) {
     let obj = objs[ii];
     if (obj.texture) {
-      textures.bind(0, obj.texture);
+      textureBind(0, obj.texture);
     }
     obj.geom.draw();
   }
@@ -182,7 +198,7 @@ Model.prototype.drawGeom = function () {
   }
 };
 
-export function load(url) {
+export function modelLoad(url) {
   if (models[url]) {
     return models[url];
   }
@@ -192,8 +208,11 @@ export function load(url) {
   return model;
 }
 
-export function startup() {
+export function modelStartup() {
   initShaders();
   let model_box = models.box = new Model('box');
   model_box.parse(webFSGetFile('models/box_textured_embed.glb').buffer);
 }
+
+// Legacy APIs
+exports.load = modelLoad;

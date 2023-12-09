@@ -7,7 +7,6 @@ const JSON5 = require('json5');
 const preamble = `(function () {
 var fs = window.glov_webfs = window.glov_webfs || {};`;
 const postamble = '}());';
-const embed_ext = '.json';
 
 let chars = (function () {
   const ESC = String.fromCharCode(27);
@@ -62,18 +61,38 @@ function fileFSName(opts, name) {
 }
 
 module.exports = function webfsBuild(opts) {
-  assert(opts.output);
+  let { output, embed, strip } = opts;
+  let ext_list = embed || ['.json'];
+  let strip_ext_list = strip || ['.json'];
+  assert(output);
+
+  let embed_exts = {};
+  for (let ii = 0; ii < ext_list.length; ++ii) {
+    embed_exts[ext_list[ii]] = true;
+  }
+  let strip_exts = {};
+  for (let ii = 0; ii < strip_ext_list.length; ++ii) {
+    strip_exts[strip_ext_list[ii]] = true;
+  }
+
   return concat({
     preamble,
     postamble,
-    output: opts.output,
+    output: output,
     key: 'name',
     proc: function (job, file, next) {
       let { name, priority } = fileFSName(opts, file.relative);
       let data = file.contents;
       let line;
-      if (name.endsWith(embed_ext)) {
-        name = name.slice(0, -embed_ext.length);
+      let ext_idx = name.lastIndexOf('.');
+      let ext = '';
+      if (ext_idx !== -1) {
+        ext = name.slice(ext_idx);
+      }
+      if (strip_exts[ext]) {
+        name = name.slice(0, -ext.length);
+      }
+      if (embed_exts[ext]) {
         line = `fs['${name}'] = ${encodeObj(JSON.parse(data))};`;
       } else {
         line = `fs['${name}'] = [${data.length},'${encodeString(data)}'];`;
@@ -84,7 +103,8 @@ module.exports = function webfsBuild(opts) {
       encodeObj,
       encodeString,
       fileFSName,
-      embed_ext,
+      ext_list,
+      strip_ext_list,
     ],
   });
 };

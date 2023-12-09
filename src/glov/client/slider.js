@@ -9,7 +9,13 @@ import {
   SPOT_NAV_RIGHT,
   spot,
 } from './spot.js';
-import { Z_MIN_INC, drawHBox, playUISound } from './ui.js';
+import {
+  Z_MIN_INC,
+  drawHBox,
+  playUISound,
+  uiButtonHeight,
+  uiButtonWidth,
+} from './ui.js';
 import * as ui from './ui.js';
 
 const SPOT_DEFAULT_SLIDER = {
@@ -23,9 +29,11 @@ const SPOT_DEFAULT_SLIDER = {
 
 let slider_default_vshrink = 1.0;
 let slider_default_handle_shrink = 1.0;
-export function sliderSetDefaultShrink(vshrink, handle_shrink) {
+let slider_default_inset = 0.0;
+export function sliderSetDefaultShrink(vshrink, handle_shrink, slider_inset) {
   slider_default_vshrink = vshrink;
   slider_default_handle_shrink = handle_shrink;
+  slider_default_inset = slider_inset || 0;
 }
 const color_slider_handle = vec4(1,1,1,1);
 const color_slider_handle_grab = vec4(0.5,0.5,0.5,1);
@@ -46,8 +54,8 @@ export function slider(value, param) {
   assert(param.min < param.max); // also must be numbers
   // optional params
   param.z = param.z || Z.UI;
-  param.w = param.w || ui.button_width;
-  param.h = param.h || ui.button_height;
+  param.w = param.w || uiButtonWidth();
+  param.h = param.h || uiButtonHeight();
   param.max_dist = param.max_dist || Infinity;
   // below: param.step = param.step || (param.max - param.min)/16;
   let vshrink = param.vshrink || slider_default_vshrink;
@@ -59,7 +67,7 @@ export function slider(value, param) {
 
   slider_dragging = false;
 
-  let shrinkdiff = handle_shrink - vshrink;
+  let shrinkdiff = handle_shrink - vshrink + slider_default_inset;
   drawHBox({
     x: param.x + param.h * shrinkdiff/2,
     y: param.y + param.h * (1 - vshrink)/2,
@@ -128,7 +136,8 @@ export function slider(value, param) {
       value = clamp(value - step, param.min, param.max);
     }
   }
-  let handle_center_pos = param.x + xoffs + draggable_width * (value - param.min) / (param.max - param.min);
+  let value_for_handle = clamp(value, param.min, param.max);
+  let handle_center_pos = param.x + xoffs + draggable_width * (value_for_handle - param.min) / (param.max - param.min);
   let handle_x = handle_center_pos - handle_w / 2;
   let handle_y = param.y + param.h / 2 - handle_h / 2;
   let handle_color = color_slider_handle;

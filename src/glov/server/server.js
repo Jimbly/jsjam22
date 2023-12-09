@@ -1,31 +1,51 @@
 // Portions Copyright 2019 Jimb Esser (https://github.com/Jimbly/)
 // Released under MIT License: https://opensource.org/licenses/MIT
 
-/* eslint-disable import/order */
-const argv = require('minimist')(process.argv.slice(2));
-const assert = require('assert');
-const { dataStoresInit } = require('./data_stores_init.js');
-const glov_exchange = require('./exchange.js');
-const exchange_local_bypass = require('./exchange_local_bypass.js');
-const { errorReportsInit, errorReportsSetAppBuildTimestamp } = require('./error_reports.js');
-const glov_channel_server = require('./channel_server.js');
-const fs = require('fs');
-const { idmapperWorkerInit } = require('./idmapper_worker.js');
-const log = require('./log.js');
+global.profilerStart = global.profilerStop = global.profilerStopStart = function () {
+  // not yet profiling on server
+};
+
+let on_panic = [];
+
+import assert from 'assert';
+import fs from 'fs';
+import path from 'path';
+import {
+  dataErrorOnError,
+  dataErrorQueueEnable,
+  dataErrorQueueGet,
+} from 'glov/common/data_error';
+import { packetEnableDebug } from 'glov/common/packet';
+import { callEach } from 'glov/common/util';
+import wscommon from 'glov/common/wscommon';
+import minimist from 'minimist';
+const argv = minimist(process.argv.slice(2));
+import glov_channel_server from './channel_server';
+import { dataStoresInit } from './data_stores_init';
+import { errorReportsInit, errorReportsSetAppBuildTimestamp } from './error_reports';
+import { exchangeCreate } from './exchange';
+import { exchangeHashedCreate } from './exchange_hashed';
+import { exchangeLocalBypassCreate } from './exchange_local_bypass';
+import { idmapperWorkerInit } from './idmapper_worker';
+import { ipBanInit } from './ip_ban';
+import log from './log';
 const { logEx } = log;
-const { masterInitApp } = require('./master_worker.js');
-const metrics = require('./metrics.js');
-const path = require('path');
-const packet = require('glov/common/packet.js');
-const { serverConfig } = require('./server_config.js');
-const { shaderStatsInit } = require('./shader_stats.js');
-const glov_wsserver = require('./wsserver.js');
-const wscommon = require('glov/common/wscommon.js');
+import { masterInitApp } from './master_worker';
+import { metricsInit } from './metrics';
+import { readyDataInit } from './ready_data';
+import { serverConfig } from './server_config';
+import { serverFilewatchTriggerChange } from './server_filewatch';
+import { shaderStatsInit } from './shader_stats';
+import glov_wsserver from './wsserver';
 const { netDelaySet } = wscommon;
 
 const STATUS_TIME = 5000;
 export let ws_server;
 export let channel_server;
+
+export function getChannelServer() {
+  return channel_server;
+}
 
 let last_status = '';
 function displayStatus() {
@@ -60,24 +80,26 @@ function updateBuildTimestamp(base_name, is_startup) {
     }
     console.info(`Build timestamp for "${base_name}"${old_timestamp ? ' changed to' : ''}: ${obj.ver}`);
     last_build_timestamp[base_name] = obj.ver;
+    ws_server.setAppBuildTimestamp(base_name, obj.ver);
     if (base_name === 'app') {
       errorReportsSetAppBuildTimestamp(obj.ver);
-      ws_server.setAppBuildTimestamp(obj.ver);
-      if (!is_startup) {
+    }
+    if (!is_startup) {
+      if (base_name === 'app') {
         // Do a broadcast message so people get a few seconds of warning
         ws_server.broadcast('chat_broadcast', {
           src: 'system',
           msg: 'New client version deployed, reloading momentarily...'
         });
-        if (argv.dev) {
-          // immediate
-          ws_server.broadcast('build', last_build_timestamp.app);
-        } else {
-          // delay by 15 seconds, the server may also be about to be restarted
-          setTimeout(function () {
-            ws_server.broadcast('build', last_build_timestamp.app);
-          }, 15000);
-        }
+      }
+      if (argv.dev) {
+        // immediate
+        ws_server.broadcast('build', { app: base_name, ver: last_build_timestamp.app });
+      } else {
+        // delay by 15 seconds, the server may also be about to be restarted
+        setTimeout(function () {
+          ws_server.broadcast('build', { app: base_name, ver: last_build_timestamp.app });
+        }, 15000);
       }
     }
   });
@@ -92,12 +114,28 @@ export function sendToBuildClients(msg, data) {
   }
 }
 
+function onDataError(err) {
+  sendToBuildClients('data_errors', [err]);
+}
+
+let recent_filewatch = [];
+const FILEWATCH_RECENT_TIME = 10000;
+function filewatchClean() {
+  if (recent_filewatch.length) {
+    let now = Date.now();
+    while (recent_filewatch.length && recent_filewatch[0][0] < now - FILEWATCH_RECENT_TIME) {
+      recent_filewatch.shift();
+    }
+  }
+}
+
 export function startup(params) {
   log.startup();
 
   let { app, data_stores, exchange, metrics_impl, on_report_load, server, server_https } = params;
   assert(app);
   assert(server);
+  assert(!exchange, 'Exchange must now be registered by type and specified in default config');
 
   if (!data_stores) {
     data_stores = {};
@@ -107,30 +145,44 @@ export function startup(params) {
   data_stores = dataStoresInit(data_stores);
 
   if (metrics_impl) {
-    metrics.init(metrics_impl);
+    metricsInit(metrics_impl);
   }
 
-  if (exchange) {
-    if (server_config.do_exchange_local_bypass) {
-      console.log('[EXCHANGE] Using local bypass');
-      exchange = exchange_local_bypass.create(exchange);
+  if (!exchange) {
+    if (server_config.exchange_providers) {
+      // eslint-disable-next-line global-require, import/no-dynamic-require
+      server_config.exchange_providers.map((provider) => require(path.join('../..', provider)));
     }
-  } else {
-    exchange = glov_exchange.create();
+    if (server_config.exchanges) {
+      let exchanges = server_config.exchanges.map(exchangeCreate);
+      console.log(`[EXCHANGE] Hashing between ${exchanges.length} exchanges`);
+      exchange = exchangeHashedCreate(exchanges);
+    } else {
+      exchange = exchangeCreate(server_config.exchange || {});
+    }
+  }
+
+  if (!exchange.no_local_bypass && server_config.do_exchange_local_bypass) {
+    console.log('[EXCHANGE] Using local bypass');
+    exchange = exchangeLocalBypassCreate(exchange);
   }
   channel_server = glov_channel_server.create();
   if (argv.dev) {
-    console.log('PacketDebug: ON');
-    packet.default_flags = packet.PACKET_DEBUG;
+    if (argv['packet-debug'] !== false) {
+      console.log('PacketDebug: ON');
+      packetEnableDebug(true);
+    }
     if (argv['net-delay'] !== false) {
       netDelaySet();
     }
+    dataErrorQueueEnable(true);
+    dataErrorOnError(onDataError);
   }
   if (server_config.log && server_config.log.load_log) {
     channel_server.load_log = true;
   }
 
-  ws_server = glov_wsserver.create(server, server_https, argv.timeout === false);
+  ws_server = glov_wsserver.create(server, server_https, argv.timeout === false, argv.dev);
   ws_server.on('error', function (error, client) {
     if (client) {
       channel_server.last_worker = client.client_channel;
@@ -149,6 +201,9 @@ export function startup(params) {
       channel_server.handleUncaughtError(error);
     }
   });
+
+  ipBanInit();
+  readyDataInit(channel_server, app);
 
   channel_server.init({
     exchange,
@@ -173,17 +228,33 @@ export function startup(params) {
 
   let gbstate;
   if (argv.dev) {
+    ws_server.on('client', function (client) {
+      filewatchClean();
+      for (let ii = 0; ii < recent_filewatch.length; ++ii) {
+        client.send('filewatch', recent_filewatch[ii][1]);
+      }
+    });
     process.on('message', function (msg) {
       if (!msg) {
         return;
       }
       if (msg.type === 'file_change') {
+        filewatchClean();
         let files = msg.paths;
         for (let ii = 0; ii < files.length; ++ii) {
           let filename = files[ii];
           console.log(`File changed: ${filename}`);
-          ws_server.broadcast('filewatch', filename);
-          let m = filename.match(/(.*)\.ver\.json$/);
+          let shortname;
+          if (filename.startsWith('client/')) {
+            shortname = filename.replace(/^client\//, '');
+            recent_filewatch.push([Date.now(), shortname]);
+            ws_server.broadcast('filewatch', shortname);
+          } else {
+            assert(filename.startsWith('server/'));
+            shortname = filename.replace(/^server\//, '');
+          }
+          serverFilewatchTriggerChange(shortname);
+          let m = shortname.match(/(.*)\.ver\.json$/);
           if (m) {
             let file_base_name = m[1]; // e.g. 'app' or 'worker'
             updateBuildTimestamp(file_base_name);
@@ -199,10 +270,18 @@ export function startup(params) {
     client.gbstate_enable = pak.readBool();
     if (client.gbstate_enable) {
       client.send('gbstate', gbstate);
+      let data_errors = dataErrorQueueGet();
+      if (data_errors.length) {
+        client.send('data_errors', data_errors);
+      }
     }
     resp_func();
   });
   updateBuildTimestamp('app', true);
+}
+
+export function onpanic(cb) {
+  on_panic.push(cb);
 }
 
 export function panic(...message) {
@@ -213,6 +292,7 @@ export function panic(...message) {
     console.error(new Error(message)); // So Stackdriver error reporting catches it
   }
   console.error('Process exiting due to panic');
+  callEach(on_panic);
   process.stderr.write(String(message), () => {
     console.error('Process exiting due to panic (2)'); // May not be seen due to buffering, but useful if it is seen
     process.exit(1);

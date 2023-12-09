@@ -3,11 +3,17 @@
 // Some code from Turbulenz: Copyright (c) 2012-2013 Turbulenz Limited
 // Released under MIT License: https://opensource.org/licenses/MIT
 
-// eslint-disable-next-line no-use-before-define
-exports.createSprite = create;
-// eslint-disable-next-line no-use-before-define
-exports.spritesClip = clip;
+// Legacy APIs
+// eslint-disable-next-line @typescript-eslint/no-use-before-define
+exports.createSprite = spriteCreate;
+// eslint-disable-next-line @typescript-eslint/no-use-before-define
+exports.create = spriteCreate;
 
+export const BlendMode = {
+  BLEND_ALPHA: 0,
+  BLEND_ADDITIVE: 1,
+  BLEND_PREMULALPHA: 2,
+};
 export const BLEND_ALPHA = 0;
 export const BLEND_ADDITIVE = 1;
 export const BLEND_PREMULALPHA = 2;
@@ -15,14 +21,34 @@ export const BLEND_PREMULALPHA = 2;
 /* eslint-disable import/order */
 const assert = require('assert');
 const camera2d = require('./camera2d.js');
+const { dynGeomQueueSprite } = require('./dyn_geom.js');
 const engine = require('./engine.js');
 const geom = require('./geom.js');
 const { cos, max, min, round, sin } = Math;
-const textures = require('./textures.js');
-const { cmpTextureArray } = textures;
-const shaders = require('./shaders.js');
-const { nextHighestPowerOfTwo } = require('glov/common/util.js');
-const { vec2, vec4 } = require('glov/common/vmath.js');
+const {
+  textureCmpArray,
+  textureBindArray,
+  textureLoad,
+  textureFilterKey,
+} = require('./textures.js');
+const {
+  SEMANTIC,
+  shaderCreate,
+  shadersBind,
+  shadersPrelink,
+} = require('./shaders.js');
+const { deprecate, nextHighestPowerOfTwo } = require('glov/common/util.js');
+const { vec2, vec4, v4set } = require('glov/common/vmath.js');
+
+deprecate(exports, 'clip', 'spriteClip');
+deprecate(exports, 'clipped', 'spriteClipped');
+deprecate(exports, 'clipPush', 'spriteClipPush');
+deprecate(exports, 'clipPop', 'spriteClipPop');
+deprecate(exports, 'clipPause', 'spriteClipPause');
+deprecate(exports, 'clipResume', 'spriteClipResume');
+deprecate(exports, 'queuefn', 'spriteQueueFn');
+deprecate(exports, 'draw', 'spriteDraw');
+deprecate(exports, 'drawPartial', 'spriteDrawPartial');
 
 export let sprite_vshader;
 export let sprite_fshader;
@@ -63,15 +89,29 @@ function SpriteData() {
   this.z = 0;
   this.blend = 0; // BLEND_ALPHA
   this.uid = 0;
+  this.chained = false;
+  this.next = null;
 }
 
 SpriteData.prototype.queue = function (z) {
-  this.z = z;
-  this.uid = ++last_uid;
   ++geom_stats.sprites;
-  sprite_queue.push(this);
+  if (!this.chained) {
+    this.z = z;
+    this.uid = ++last_uid;
+    sprite_queue.push(this);
+  }
 };
 
+let is_chained = false;
+let chained_prev = null;
+export function spriteChainedStart() {
+  is_chained = true;
+  chained_prev = null;
+}
+export function spriteChainedStop() {
+  is_chained = false;
+  chained_prev = null;
+}
 
 export function spriteDataAlloc(texs, shader, shader_params, blend) {
   let ret;
@@ -81,18 +121,28 @@ export function spriteDataAlloc(texs, shader, shader_params, blend) {
     ret = new SpriteData();
   }
   ret.texs = texs;
-  ret.shader = shader || null;
-  if (shader_params) {
-    shader_params.clip_space = sprite_shader_params.clip_space;
-    ret.shader_params = shader_params;
+  if (is_chained && chained_prev) {
+    ret.chained = true;
+    chained_prev.next = ret;
   } else {
-    ret.shader_params = null;
+    ret.chained = false;
+    ret.shader = shader || null;
+    if (shader_params) {
+      shader_params.clip_space = sprite_shader_params.clip_space;
+      ret.shader_params = shader_params;
+    } else {
+      ret.shader_params = null;
+    }
+    ret.blend = blend || 0; // BLEND_ALPHA
   }
-  ret.blend = blend || 0; // BLEND_ALPHA
+  if (is_chained) {
+    chained_prev = ret;
+  }
   return ret;
 }
 
 function cmpSprite(a, b) {
+  ++geom_stats.sprite_sort_cmps;
   if (a.z !== b.z) {
     return a.z - b.z;
   }
@@ -109,7 +159,7 @@ function cmpSprite(a, b) {
   return a.uid - b.uid;
 }
 
-export function queuefn(z, fn) {
+export function spriteQueueFn(z, fn) {
   assert(isFinite(z));
   sprite_queue.push({
     fn,
@@ -299,22 +349,19 @@ function fillUVs(tex, w, h, nozoom, uvs) {
   temp_uvs[3] = uvs[3] - vbias / tex.height;
 }
 
-// Colors counter-clockwise from upper-left
-// c0 = upper left
-// c1 = lower left
-// c2 = lower right
-// c3 = upper right
-export function queuesprite4color(
-  sprite, x, y, z, w, h, rot, uvs, c0, c1, c2, c3, shader, shader_params, nozoom,
-  pixel_perfect, blend
-) {
+let qsp = {};
+function queuesprite4colorObj() {
+  let {
+    rot, z, sprite,
+    color_ul, color_ll, color_lr, color_ur,
+  } = qsp;
   assert(isFinite(z));
-  let elem = spriteDataAlloc(sprite.texs, shader, shader_params, blend);
-  x = (x - camera2d.data[0]) * camera2d.data[4];
-  y = (y - camera2d.data[1]) * camera2d.data[5];
-  w *= camera2d.data[4];
-  h *= camera2d.data[5];
-  if (pixel_perfect) {
+  let elem = spriteDataAlloc(sprite.texs, qsp.shader, qsp.shader_params, qsp.blend);
+  let x = (qsp.x - camera2d.data[0]) * camera2d.data[4];
+  let y = (qsp.y - camera2d.data[1]) * camera2d.data[5];
+  let w = qsp.w * camera2d.data[4];
+  let h = qsp.h * camera2d.data[5];
+  if (qsp.pixel_perfect) {
     x |= 0;
     y |= 0;
     w |= 0;
@@ -360,32 +407,32 @@ export function queuesprite4color(
     data[25] = y1 + sw;
   }
 
-  fillUVs(elem.texs[0], w, h, nozoom, uvs);
-  data[2] = c0[0];
-  data[3] = c0[1];
-  data[4] = c0[2];
-  data[5] = c0[3];
+  fillUVs(elem.texs[0], w, h, qsp.nozoom, qsp.uvs);
+  data[2] = color_ul[0];
+  data[3] = color_ul[1];
+  data[4] = color_ul[2];
+  data[5] = color_ul[3];
   data[6] = temp_uvs[0];
   data[7] = temp_uvs[1];
 
-  data[10] = c1[0];
-  data[11] = c1[1];
-  data[12] = c1[2];
-  data[13] = c1[3];
+  data[10] = color_ll[0];
+  data[11] = color_ll[1];
+  data[12] = color_ll[2];
+  data[13] = color_ll[3];
   data[14] = temp_uvs[0];
   data[15] = temp_uvs[3];
 
-  data[18] = c2[0];
-  data[19] = c2[1];
-  data[20] = c2[2];
-  data[21] = c2[3];
+  data[18] = color_lr[0];
+  data[19] = color_lr[1];
+  data[20] = color_lr[2];
+  data[21] = color_lr[3];
   data[22] = temp_uvs[2];
   data[23] = temp_uvs[3];
 
-  data[26] = c3[0];
-  data[27] = c3[1];
-  data[28] = c3[2];
-  data[29] = c3[3];
+  data[26] = color_ur[0];
+  data[27] = color_ur[1];
+  data[28] = color_ur[2];
+  data[29] = color_ur[3];
   data[30] = temp_uvs[2];
   data[31] = temp_uvs[1];
 
@@ -395,14 +442,28 @@ export function queuesprite4color(
 
 export function queuesprite(
   sprite, x, y, z, w, h, rot, uvs, color, shader, shader_params, nozoom,
-  pixel_perfect, blend
+  pixel_perfect, blend,
 ) {
+  assert(!sprite.lazy_load); // Would be pretty easy to add support if needed
   color = color || sprite.color;
-  return queuesprite4color(
-    sprite, x, y, z, w, h, rot, uvs,
-    color, color, color, color,
-    shader, shader_params, nozoom,
-    pixel_perfect, blend);
+  qsp.sprite = sprite;
+  qsp.x = x;
+  qsp.y = y;
+  qsp.z = z;
+  qsp.w = w;
+  qsp.h = h;
+  qsp.rot = rot;
+  qsp.uvs = uvs;
+  qsp.color_ul = color;
+  qsp.color_ll = color;
+  qsp.color_lr = color;
+  qsp.color_ur = color;
+  qsp.shader = shader;
+  qsp.shader_params = shader_params;
+  qsp.nozoom = nozoom;
+  qsp.pixel_perfect = pixel_perfect;
+  qsp.blend = blend;
+  return queuesprite4colorObj(qsp);
 }
 
 let clip_temp_xy = vec2();
@@ -434,23 +495,31 @@ function clipCoordsDom(x, y, w, h) {
   return xywh;
 }
 
-export function clip(z_start, z_end, x, y, w, h) {
-  let scissor = clipCoordsScissor(x, y, w, h);
-  queuefn(z_start - 0.01, () => {
+let active_scissor = null;
+function scissorSet(scissor) {
+  if (!active_scissor) {
     gl.enable(gl.SCISSOR_TEST);
-    gl.scissor(scissor[0], scissor[1], scissor[2], scissor[3]);
-  });
-  queuefn(z_end - 0.01, () => {
-    gl.disable(gl.SCISSOR_TEST);
-  });
+  }
+  gl.scissor(scissor[0], scissor[1], scissor[2], scissor[3]);
+  active_scissor = scissor;
+}
+function scisssorClear() {
+  gl.disable(gl.SCISSOR_TEST);
+  active_scissor = null;
+}
+
+export function spriteClip(z_start, z_end, x, y, w, h) {
+  let scissor = clipCoordsScissor(x, y, w, h);
+  spriteQueueFn(z_start - 0.01, scissorSet.bind(null, scissor));
+  spriteQueueFn(z_end - 0.01, scisssorClear);
 }
 
 let clip_stack = [];
-export function clipped() {
+export function spriteClipped() {
   return clip_stack.length > 0;
 }
 
-export function clipPush(z, x, y, w, h) {
+export function spriteClipPush(z, x, y, w, h) {
   assert(clip_stack.length < 10); // probably leaking
   let scissor = clipCoordsScissor(x, y, w, h);
   let dom_clip = clipCoordsDom(x, y, w, h);
@@ -461,11 +530,9 @@ export function clipPush(z, x, y, w, h) {
   });
 }
 
-export function clipPop() {
-  assert(clipped());
-  queuefn(Z.TOOLTIP - 0.1, () => {
-    gl.disable(gl.SCISSOR_TEST);
-  });
+export function spriteClipPop() {
+  assert(spriteClipped());
+  spriteQueueFn(Z.TOOLTIP - 0.1, scisssorClear);
   let { z, scissor } = clip_stack.pop();
   let sprites = sprite_queue;
   spriteQueuePop(true);
@@ -475,21 +542,25 @@ export function clipPop() {
   } else {
     camera2d.setInputClipping(null);
   }
-  queuefn(z, () => {
-    gl.enable(gl.SCISSOR_TEST);
-    gl.scissor(scissor[0], scissor[1], scissor[2], scissor[3]);
+  spriteQueueFn(z, () => {
+    let prev_scissor = active_scissor;
+    scissorSet(scissor);
     spriteQueuePush();
     sprite_queue = sprites;
-    exports.draw();
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define
+    spriteDraw();
     spriteQueuePop();
-    // done at Z.TOOLTIP: gl.disable(gl.SCISSOR_TEST);
+    // already done at Z.TOOLTIP within spriteDraw(): scisssorClear();
+    if (prev_scissor) {
+      scissorSet(prev_scissor);
+    }
   });
 }
 
 let clip_paused;
-export function clipPause() {
+export function spriteClipPause() {
   // Queue back into the root sprite queue
-  assert(clipped());
+  assert(spriteClipped());
   assert(!clip_paused);
   clip_paused = true;
   spriteQueuePush(sprite_queue_stack[0]);
@@ -498,12 +569,12 @@ export function clipPause() {
   // escaped when it pops.
   clip_stack.push({ dom_clip: null });
 }
-export function clipResume() {
-  assert(clipped());
+export function spriteClipResume() {
+  assert(spriteClipped());
   assert(clip_paused);
   clip_stack.pop(); // remove us
   clip_paused = false;
-  assert(clipped());
+  assert(spriteClipped());
   let { dom_clip } = clip_stack[clip_stack.length - 1];
   spriteQueuePop(true);
   camera2d.setInputClipping(dom_clip);
@@ -567,7 +638,7 @@ function commitAndFlush() {
     let batch = batches[ii];
     let { state, start, end } = batch;
     if (last_bound_shader !== state.shader || state.shader_params) {
-      shaders.bind(sprite_vshader,
+      shadersBind(sprite_vshader,
         state.shader || sprite_fshader,
         state.shader_params || sprite_shader_params);
       last_bound_shader = state.shader;
@@ -575,7 +646,7 @@ function commitAndFlush() {
     if (last_blend_mode !== state.blend) {
       blendModeSet(state.blend);
     }
-    textures.bindArray(state.texs);
+    textureBindArray(state.texs);
     ++geom_stats.draw_calls_sprite;
     gl.drawElements(sprite_geom.mode, (end - start) * 3 / 2, gl.UNSIGNED_SHORT, start * 3);
   }
@@ -601,9 +672,9 @@ function drawSetup() {
 
   if (!sprite_geom) {
     sprite_geom = geom.create([
-      [shaders.semantic.POSITION, gl.FLOAT, 2, false],
-      [shaders.semantic.COLOR, gl.FLOAT, 4, false],
-      [shaders.semantic.TEXCOORD, gl.FLOAT, 2, false],
+      [SEMANTIC.POSITION, gl.FLOAT, 2, false],
+      [SEMANTIC.COLOR, gl.FLOAT, 4, false],
+      [SEMANTIC.TEXCOORD, gl.FLOAT, 2, false],
     ], [], null, geom.QUADS);
     sprite_buffer = new Float32Array(1024);
     sprite_buffer_len = sprite_buffer.length / 8;
@@ -611,6 +682,7 @@ function drawSetup() {
 
   profilerStart('sort');
   sprite_queue.sort(cmpSprite);
+  geom_stats.sprite_sort_elems += sprite_queue.length;
   profilerStop('sort');
 
   batch_state = null;
@@ -619,7 +691,14 @@ function drawSetup() {
   assert.equal(batches.length, 0);
 }
 
+function growSpriteBuffer() {
+  let new_length = min((sprite_buffer_len * 1.25 + 3) & ~3, MAX_VERT_COUNT);
+  sprite_buffer_len = new_length;
+  sprite_buffer = new Float32Array(new_length * 8);
+}
+
 function drawElem(elem) {
+  let count = 0;
   if (elem.fn) {
     commitAndFlush();
     batch_state = null;
@@ -632,9 +711,10 @@ function drawElem(elem) {
 
     clip_space[0] = 2 / engine.viewport[2];
     clip_space[1] = -2 / engine.viewport[3];
+    count++;
   } else {
     if (!batch_state ||
-      cmpTextureArray(elem.texs, batch_state.texs) ||
+      textureCmpArray(elem.texs, batch_state.texs) ||
       elem.shader !== batch_state.shader ||
       elem.shader_params !== batch_state.shader_params ||
       elem.blend !== batch_state.blend
@@ -642,27 +722,32 @@ function drawElem(elem) {
       commit();
       batch_state = elem;
     }
-    if (sprite_buffer_idx + 4 > sprite_buffer_len) {
-      commitAndFlush();
-      // batch_state left alone
-      if (sprite_buffer_len !== MAX_VERT_COUNT) {
-        let new_length = min((sprite_buffer_len * 1.25 + 3) & ~3, MAX_VERT_COUNT);
-        sprite_buffer_len = new_length;
-        sprite_buffer = new Float32Array(new_length * 8);
+    do {
+      if (sprite_buffer_idx + 4 > sprite_buffer_len) {
+        commitAndFlush();
+        // batch_state left alone
+        if (sprite_buffer_len !== MAX_VERT_COUNT) {
+          growSpriteBuffer();
+        }
       }
-    }
 
-    let index = sprite_buffer_idx * 8;
-    sprite_buffer_idx += 4;
+      let index = sprite_buffer_idx * 8;
+      sprite_buffer_idx += 4;
 
-    // measurably slower:
-    // for (let ii = 0; ii < 32; ++ii) {
-    //   sprite_buffer[index + ii] = elem.data[ii];
-    // }
-    sprite_buffer.set(elem.data, index);
+      // measurably slower:
+      // for (let ii = 0; ii < 32; ++ii) {
+      //   sprite_buffer[index + ii] = elem.data[ii];
+      // }
+      sprite_buffer.set(elem.data, index);
+      count++;
 
-    sprite_freelist.push(elem);
+      sprite_freelist.push(elem);
+      let next = elem.next;
+      elem.next = null;
+      elem = next;
+    } while (elem);
   }
+  return count;
 }
 
 function finishDraw() {
@@ -670,7 +755,11 @@ function finishDraw() {
   blendModeReset();
 }
 
-export function draw() {
+export function spriteDrawReset() {
+  active_scissor = null;
+}
+
+export function spriteDraw() {
   profilerStart('sprites:draw');
   drawSetup();
   profilerStart('drawElem');
@@ -678,18 +767,17 @@ export function draw() {
     let elem = sprite_queue[ii];
     drawElem(elem);
   }
-  profilerStop('drawElem', sprite_queue.length);
+  profilerStop('drawElem');
   sprite_queue.length = 0;
   finishDraw();
-  profilerStop('sprites:draw', sprite_queue.length);
+  profilerStop('sprites:draw');
 }
 
-export function drawPartial(z) {
+export function spriteDrawPartial(z) {
   profilerStart('sprites:drawPartial');
   drawSetup();
   profilerStart('drawElem');
-  let ii;
-  for (ii = 0; ii < sprite_queue.length; ++ii) {
+  for (let ii = 0; ii < sprite_queue.length; ++ii) {
     let elem = sprite_queue[ii];
     if (elem.z > z) {
       sprite_queue = sprite_queue.slice(ii);
@@ -697,7 +785,7 @@ export function drawPartial(z) {
     }
     drawElem(elem);
   }
-  profilerStop('drawElem', ii);
+  profilerStop('drawElem');
   finishDraw();
   profilerStop('sprites:drawPartial');
 }
@@ -764,19 +852,43 @@ export function buildRects(ws, hs, tex) {
   };
 }
 
+function flipRectHoriz(a) {
+  return vec4(a[0], a[3], a[2], a[1]);
+}
+
+export function spriteFlippedUVsApplyHFlip(spr) {
+  if (!spr.uidata.rects_orig) {
+    spr.uidata.rects_orig = spr.uidata.rects;
+  }
+  if (!spr.uidata.rects_flipped) {
+    spr.uidata.rects_flipped = spr.uidata.rects.map(flipRectHoriz);
+  }
+  spr.uidata.rects = spr.uidata.rects_flipped;
+}
+
+export function spriteFlippedUVsRestore(spr) {
+  if (spr.uidata.rects_orig) {
+    spr.uidata.rects = spr.uidata.rects_orig;
+  }
+}
+
 function Sprite(params) {
+  this.lazy_load = null;
+
   if (params.texs) {
     this.texs = params.texs;
   } else {
     let ext = params.ext || '.png';
     this.texs = [];
     if (params.tex) {
+      assert(!params.lazy_load);
       this.texs.push(params.tex);
     } else if (params.layers) {
       assert(params.name);
+      assert(!params.lazy_load); // Not currently supported for multi-layer sprites
       this.texs = [];
       for (let ii = 0; ii < params.layers; ++ii) {
-        this.texs.push(textures.load({
+        this.texs.push(textureLoad({
           url: `img/${params.name}_${ii}${ext}`,
           filter_min: params.filter_min,
           filter_mag: params.filter_mag,
@@ -784,17 +896,25 @@ function Sprite(params) {
           wrap_t: params.wrap_t,
         }));
       }
-    } else if (params.name) {
-      this.texs.push(textures.load({
-        url: `img/${params.name}${ext}`,
-        filter_min: params.filter_min,
-        filter_mag: params.filter_mag,
-        wrap_s: params.wrap_s,
-        wrap_t: params.wrap_t,
-      }));
     } else {
-      assert(params.url);
-      this.texs.push(textures.load(params));
+      let tex_param;
+      if (params.name) {
+        tex_param = {
+          url: `img/${params.name}${ext}#${textureFilterKey(params)}`,
+          filter_min: params.filter_min,
+          filter_mag: params.filter_mag,
+          wrap_s: params.wrap_s,
+          wrap_t: params.wrap_t,
+        };
+      } else {
+        assert(params.url);
+        tex_param = params;
+      }
+      if (params.lazy_load) {
+        this.lazy_load = tex_param;
+      } else {
+        this.texs.push(textureLoad(tex_param));
+      }
     }
   }
 
@@ -802,22 +922,68 @@ function Sprite(params) {
   this.size = params.size || vec2(1, 1);
   this.color = params.color || vec4(1,1,1,1);
   this.uvs = params.uvs || vec4(0, 0, 1, 1);
-  if (!params.uvs) {
-    // Fix up non-power-of-two textures
-    this.texs[0].onLoad((tex) => {
-      this.uvs[2] = tex.src_width / tex.width;
-      this.uvs[3] = tex.src_height / tex.height;
-    });
-  }
-
   if (params.ws) {
     this.uidata = buildRects(params.ws, params.hs);
-    this.texs[0].onLoad((tex) => {
-      this.uidata = buildRects(params.ws, params.hs, tex);
-    });
   }
   this.shader = params.shader || null;
+
+  let tex_on_load = (tex) => {
+    if (!params.uvs) {
+      // Fix up non-power-of-two textures
+      this.uvs[2] = tex.src_width / tex.width;
+      this.uvs[3] = tex.src_height / tex.height;
+    }
+    if (params.ws) {
+      this.uidata = buildRects(params.ws, params.hs, tex);
+    }
+  };
+  if (this.texs.length) {
+    this.texs[0].onLoad(tex_on_load);
+  } else {
+    this.tex_on_load = tex_on_load;
+  }
 }
+
+Sprite.prototype.lazyLoadInit = function () {
+  let tex = textureLoad({
+    ...this.lazy_load,
+    auto_unload: () => {
+      this.texs = [];
+    },
+  });
+  this.texs.push(tex);
+  this.loaded_at = 0;
+  if (tex.loaded) {
+    // already completely loaded
+    this.tex_on_load(tex);
+  } else {
+    tex.onLoad(() => {
+      this.loaded_at = engine.frame_timestamp;
+      this.tex_on_load(tex);
+    });
+  }
+};
+
+Sprite.prototype.lazyLoad = function () {
+  if (!this.texs.length) {
+    this.lazyLoadInit();
+  }
+  if (!this.texs[0].loaded) {
+    return 0;
+  }
+  if (!this.loaded_at) {
+    return 1;
+  }
+  let dt = engine.frame_timestamp - this.loaded_at;
+  let alpha = dt / 250;
+  if (alpha >= 1) {
+    this.loaded_at = 0;
+    return 1;
+  }
+  return alpha;
+};
+
+let temp_color = vec4();
 
 // params:
 //   required: x, y
@@ -826,11 +992,37 @@ Sprite.prototype.draw = function (params) {
   if (params.w === 0 || params.h === 0) {
     return null;
   }
+  let color = params.color || this.color;
+  if (this.lazy_load) {
+    let alpha = this.lazyLoad();
+    if (!alpha) {
+      return null;
+    }
+    if (alpha !== 1) {
+      color = v4set(temp_color, color[0], color[1], color[2], color[3] * alpha);
+    }
+  }
   let w = (params.w || 1) * this.size[0];
   let h = (params.h || 1) * this.size[1];
   let uvs = (typeof params.frame === 'number') ? this.uidata.rects[params.frame] : (params.uvs || this.uvs);
-  return queuesprite(this, params.x, params.y, params.z || Z.UI, w, h, params.rot, uvs, params.color || this.color,
-    params.shader || this.shader, params.shader_params, params.nozoom, params.pixel_perfect, params.blend);
+  qsp.sprite = this;
+  qsp.x = params.x;
+  qsp.y = params.y;
+  qsp.z = params.z || Z.UI;
+  qsp.w = w;
+  qsp.h = h;
+  qsp.rot = params.rot;
+  qsp.uvs = uvs;
+  qsp.color_ul = color;
+  qsp.color_ll = color;
+  qsp.color_lr = color;
+  qsp.color_ur = color;
+  qsp.shader = params.shader || this.shader;
+  qsp.shader_params = params.shader_params;
+  qsp.nozoom = params.nozoom;
+  qsp.pixel_perfect = params.pixel_perfect;
+  qsp.blend = params.blend;
+  return queuesprite4colorObj(qsp);
 };
 
 Sprite.prototype.drawDualTint = function (params) {
@@ -841,34 +1033,73 @@ Sprite.prototype.drawDualTint = function (params) {
   return this.draw(params);
 };
 
+let temp_color_ul = vec4();
+let temp_color_ll = vec4();
+let temp_color_ur = vec4();
+let temp_color_lr = vec4();
 Sprite.prototype.draw4Color = function (params) {
   if (params.w === 0 || params.h === 0) {
     return null;
   }
+  qsp.color_ul = params.color_ul;
+  qsp.color_ll = params.color_ll;
+  qsp.color_lr = params.color_lr;
+  qsp.color_ur = params.color_ur;
+  if (this.lazy_load) {
+    let alpha = this.lazyLoad();
+    if (!alpha) {
+      return null;
+    }
+    if (alpha !== 1) {
+      qsp.color_ul = v4set(temp_color_ul, qsp.color_ul[0], qsp.color_ul[1], qsp.color_ul[2], qsp.color_ul[3] * alpha);
+      qsp.color_ll = v4set(temp_color_ll, qsp.color_ll[0], qsp.color_ll[1], qsp.color_ll[2], qsp.color_ll[3] * alpha);
+      qsp.color_ur = v4set(temp_color_ur, qsp.color_ur[0], qsp.color_ur[1], qsp.color_ur[2], qsp.color_ur[3] * alpha);
+      qsp.color_lr = v4set(temp_color_lr, qsp.color_lr[0], qsp.color_lr[1], qsp.color_lr[2], qsp.color_lr[3] * alpha);
+    }
+  }
   let w = (params.w || 1) * this.size[0];
   let h = (params.h || 1) * this.size[1];
   let uvs = (typeof params.frame === 'number') ? this.uidata.rects[params.frame] : (params.uvs || this.uvs);
-
-  return queuesprite4color(this,
-    params.x, params.y, params.z || Z.UI, w, h,
-    params.rot, uvs,
-    params.color_ul, params.color_ll, params.color_lr, params.color_ur,
-    params.shader || this.shader,
-    params.shader_params, params.nozoom,
-    params.pixel_perfect, params.blend);
+  qsp.sprite = this;
+  qsp.x = params.x;
+  qsp.y = params.y;
+  qsp.z = params.z || Z.UI;
+  qsp.w = w;
+  qsp.h = h;
+  qsp.rot = params.rot;
+  qsp.uvs = uvs;
+  qsp.shader = params.shader || this.shader;
+  qsp.shader_params = params.shader_params;
+  qsp.nozoom = params.nozoom;
+  qsp.pixel_perfect = params.pixel_perfect;
+  qsp.blend = params.blend;
+  return queuesprite4colorObj(qsp);
 };
 
-export function create(params) {
+Sprite.prototype.draw3D = function (params) {
+  // Note: ignoring this.size[] for now for simplicity, is this useful?
+  // let w = (params.size[0] || 1) * this.size[0];
+  // let h = (params.size[1] || 1) * this.size[1];
+  if (typeof params.frame === 'number') {
+    params.uvs = this.uidata.rects[params.frame];
+  } else if (!params.uvs) {
+    params.uvs = this.uvs;
+  }
+  dynGeomQueueSprite(this, params);
+};
+
+
+export function spriteCreate(params) {
   return new Sprite(params);
 }
 
-export function startup() {
+export function spriteStartup() {
   geom_stats = geom.stats;
   clip_space[2] = -1;
   clip_space[3] = 1;
-  sprite_vshader = shaders.create('shaders/sprite.vp');
-  sprite_fshader = shaders.create('shaders/sprite.fp');
-  sprite_dual_fshader = shaders.create('shaders/sprite_dual.fp');
-  shaders.prelink(sprite_vshader, sprite_fshader);
-  shaders.prelink(sprite_vshader, sprite_dual_fshader);
+  sprite_vshader = shaderCreate('shaders/sprite.vp');
+  sprite_fshader = shaderCreate('shaders/sprite.fp');
+  sprite_dual_fshader = shaderCreate('shaders/sprite_dual.fp');
+  shadersPrelink(sprite_vshader, sprite_fshader);
+  shadersPrelink(sprite_vshader, sprite_dual_fshader);
 }

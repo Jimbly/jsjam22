@@ -11,13 +11,14 @@ const engine = require('./engine.js');
 const { framebufferCapture } = require('./framebuffer.js');
 const mat4LookAt = require('gl-mat4/lookAt');
 const { max, PI, tan } = Math;
-const shaders = require('./shaders.js');
+const { shaderCreate, shadersPrelink } = require('./shaders.js');
 const sprites = require('./sprites.js');
+const { spriteCreate } = require('glov/client/sprites.js');
 const {
   blendModeSet,
   BLEND_ALPHA,
 } = sprites;
-const textures = require('./textures.js');
+const { textureCreateForCapture } = require('./textures.js');
 const {
   mat4,
   vec3,
@@ -94,8 +95,8 @@ export function snapshot(param) {
   let name = param.name || `snapshot_${++last_snapshot_idx}`;
   let auto_unload = param.on_unload;
   let texs = param.sprite && param.sprite.texs || [
-    textures.createForCapture(`${name}(0)`, auto_unload),
-    textures.createForCapture(`${name}(1)`, auto_unload)
+    textureCreateForCapture(`${name}(0)`, auto_unload),
+    textureCreateForCapture(`${name}(1)`, auto_unload)
   ];
 
   param.viewport = [0, 0, param.w, param.h];
@@ -149,7 +150,7 @@ export function snapshot(param) {
   viewportRenderFinish(param);
 
   if (!param.sprite) {
-    param.sprite = sprites.create({
+    param.sprite = spriteCreate({
       texs,
       shader: snapshot_shader,
       uvs: capture_uvs,
@@ -159,6 +160,6 @@ export function snapshot(param) {
 }
 
 export function snapshotStartup() {
-  snapshot_shader = shaders.create('shaders/snapshot.fp');
-  shaders.prelink(sprites.sprite_vshader, snapshot_shader);
+  snapshot_shader = shaderCreate('shaders/snapshot.fp');
+  shadersPrelink(sprites.sprite_vshader, snapshot_shader);
 }

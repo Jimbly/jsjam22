@@ -1,20 +1,35 @@
 // Portions Copyright 2019 Jimb Esser (https://github.com/Jimbly/)
 // Released under MIT License: https://opensource.org/licenses/MIT
 
-/* eslint-disable import/order */
-const assert = require('assert');
-const camera2d = require('./camera2d.js');
-const glov_engine = require('./engine.js');
-const { applyCopy, effectsQueue, effectsIsFinal } = require('./effects.js');
-const { framebufferCapture, framebufferStart, framebufferEnd, temporaryTextureClaim } = require('./framebuffer.js');
-const { floor, min, pow, random } = Math;
-const sprites = require('./sprites.js');
-const shaders = require('./shaders.js');
-const textures = require('./textures.js');
-const glov_ui = require('./ui.js');
-const { easeOut } = require('glov/common/util.js');
-const { unit_vec, vec4 } = require('glov/common/vmath.js');
-const verify = require('glov/common/verify.js');
+import assert from 'assert';
+import {
+  easeOut,
+  lerp,
+} from 'glov/common/util';
+import * as verify from 'glov/common/verify';
+import { unit_vec, vec4 } from 'glov/common/vmath';
+import * as camera2d from './camera2d';
+import {
+  applyCopy,
+  effectsIsFinal,
+  effectsQueue,
+} from './effects';
+import * as glov_engine from './engine';
+import {
+  framebufferCapture,
+  framebufferEnd,
+  framebufferStart,
+  temporaryTextureClaim,
+} from './framebuffer';
+import { shaderCreate } from './shaders';
+import * as sprites from './sprites';
+import { textureCreateForCapture } from './textures';
+import * as glov_ui from './ui';
+
+const { PI, abs, cos, floor, min, pow, random, sin, sqrt } = Math;
+const SQRT1_2 = sqrt(1/2);
+const PI_4 = PI/4;
+const PI_2 = PI/2;
 
 let transitions = [];
 
@@ -32,7 +47,7 @@ const shader_data = {
 function getShader(key) {
   let elem = shader_data[key];
   if (!elem.shader) {
-    elem.shader = shaders.create(elem.fp);
+    elem.shader = shaderCreate(elem.fp);
   }
   return elem.shader;
 }
@@ -47,7 +62,7 @@ function GlovTransition(z, func) {
 function transitionCapture(trans) {
   // Warning: Slow on iOS
   assert(!trans.capture);
-  trans.capture = textures.createForCapture();
+  trans.capture = textureCreateForCapture();
   framebufferCapture(trans.capture);
 }
 
@@ -93,7 +108,7 @@ export function queue(z, fn) {
   } else {
     // queue up a capture past the specified Z, so transitions rendering at that Z (plus a handful) get captured
     effectsQueue(z + Z.TRANSITION_RANGE, transitionCaptureFramebuffer.bind(null, trans));
-    //sprites.queuefn(z + Z.TRANSITION_RANGE, transitionCapture.bind(null, trans));
+    //spriteQueueFn(z + Z.TRANSITION_RANGE, transitionCapture.bind(null, trans));
   }
   return true;
 }
@@ -145,8 +160,6 @@ function glovTransitionFadeFunc(fade_time, z, initial, ms_since_start, force_end
 }
 
 
-/*
-  // Doesn't work because we need more than just 2 UV values in the queue call
 function glovTransitionWipeFunc(wipe_time, wipe_angle, z, tex, ms_since_start, force_end) {
   let progress = min(ms_since_start / wipe_time, 1);
 
@@ -162,6 +175,9 @@ function glovTransitionWipeFunc(wipe_time, wipe_angle, z, tex, ms_since_start, f
     points[ii].y = y;
   }
 
+  // change 0 degrees to be up, not right, to match other things.
+  wipe_angle -= PI/2;
+
   while (wipe_angle > PI) {
     wipe_angle -= (2 * PI);
   }
@@ -169,7 +185,6 @@ function glovTransitionWipeFunc(wipe_time, wipe_angle, z, tex, ms_since_start, f
     wipe_angle += (2 * PI);
   }
 
-  // TODO: if anyone ever uses this, change 0 degrees to be up, not right, to match other things?
   if (wipe_angle >= -PI_4 && wipe_angle <= PI_4) {
     // horizontal wipe from left to right
     let x0 = progress * 2; // rightmost x
@@ -231,20 +246,18 @@ function glovTransitionWipeFunc(wipe_time, wipe_angle, z, tex, ms_since_start, f
   points[2].v = lerp(points[2].y, uvs[0][1], uvs[1][1]);
   points[3].v = lerp(points[3].y, uvs[0][1], uvs[1][1]);
 
-  sprites.queueraw4([tex],
-    points[0].x, points[0].y, points[3].x, points[3].y,
-    points[2].x, points[2].y, points[1].x, points[1].y,
-    z,
-    points[0].u, points[0].v, points[2].u, points[2].v,
-    unit_vec, 'alpha_nearest');
+  sprites.queueraw4color([tex],
+    points[0].x, points[0].y, unit_vec, points[0].u, points[0].v,
+    points[3].x, points[3].y, unit_vec, points[3].u, points[3].v,
+    points[2].x, points[2].y, unit_vec, points[2].u, points[2].v,
+    points[1].x, points[1].y, unit_vec, points[1].u, points[1].v,
+    z);
 
   if (force_end || progress === 1) {
     return REMOVE;
   }
   return CONTINUE;
 }
-
-*/
 
 function glovTransitionSplitScreenFunc(time, border_width, slide_window, z, tex, ms_since_start, force_end) {
   let border_color = vec4(1, 1, 1, 1);
@@ -340,9 +353,9 @@ export function fade(fade_time) {
   return glovTransitionFadeFunc.bind(null, fade_time);
 }
 
-// export function wipe(wipe_time, wipe_angle) {
-//   return glovTransitionWipeFunc.bind(null, wipe_time, wipe_angle);
-// }
+export function wipe(wipe_time, wipe_angle) {
+  return glovTransitionWipeFunc.bind(null, wipe_time, wipe_angle);
+}
 
 // border_width in camera-relative size
 export function splitScreen(time, border_width, slide_window) {
@@ -368,12 +381,12 @@ export function randomTransition(fade_time_scale) {
       return splitScreen(250 * fade_time_scale, 2, false);
     case 2:
       return pixelate(750 * fade_time_scale);
-    // case 3:
-    //   return wipe(250 * fade_time_scale, random() * 2 * PI);
+    case 3:
+      return wipe(250 * fade_time_scale, random() * 2 * PI);
     // case 4:
     //   if (!logo) {
     //     GlovTextureLoadOptions options;
-    //     options.clamp_s = options.clamp_t = true;
+    //     options.wrap_s = options.wrap_t = gl.CLAMP_TO_EDGE;
     //     logo = GlovTextures::loadtex("data/SampleLogoTransition.png", &options);
     //   }
     //   glovTransitionQueue(Z_TRANSITION_FINAL, glovTransitionLogoZoom(500, logo));

@@ -1,39 +1,39 @@
 // Portions Copyright 2022 Jimb Esser (https://github.com/Jimbly/)
 // Released under MIT License: https://opensource.org/licenses/MIT
 
-// This is ported pretty directly from libGLOV, could really use a fresh
-//   implementation that is more focus aware and gamepad friendly, and should
-//   use ui.buttonShared logic.
-
 import assert from 'assert';
-import { clamp, merge } from 'glov/common/util.js';
-import verify from 'glov/common/verify.js';
+import { clamp, merge } from 'glov/common/util';
 import { Vec4, vec2, vec4 } from 'glov/common/vmath';
-import * as camera2d from './camera2d.js';
-import * as engine from './engine.js';
-import * as input from './input.js';
-import { KEYS, PAD } from './input.js';
+import * as camera2d from './camera2d';
+import * as engine from './engine';
+import { renderNeeded } from './engine';
+import { Box } from './geom_types';
+import * as input from './input';
+import {
+  BUTTON_LEFT,
+  KEYS,
+  PAD,
+} from './input';
 import {
   SPOT_DEFAULT_BUTTON,
   SPOT_STATE_DOWN,
   SPOT_STATE_FOCUSED,
   spot,
+  spotPadMode,
   spotSubBegin,
   spotSubEnd,
   spotUnfocus,
-} from './spot.js';
-import { clipPop, clipPush } from './sprites.js';
-import * as ui from './ui.js';
+} from './spot';
+import { spriteClipPop, spriteClipPush } from './sprites';
+import * as ui from './ui';
+import { uiTextHeight } from './ui';
 
-// TODO: remove when ui.js is converted to TS
-import type { UISprites } from 'glov/common/types.js';
-
-const { max, min, round } = Math;
+const { abs, max, min, round } = Math;
 
 // TODO: move FocusableElement to appropriate TS file after conversion (probably input)
 interface FocusableElement {
-  focus: () => void
-  is_focused: boolean,
+  focus: () => void;
+  is_focused: boolean;
 }
 
 const MAX_OVERSCROLL = 50;
@@ -48,74 +48,88 @@ export function scrollAreaSetPixelScale(scale: number): void {
   default_pixel_scale = scale;
 }
 
-interface ScrollAreaOpts {
+interface ScrollAreaOptsAll extends Box {
   // configuration options
-  x?: number,
-  y?: number,
-  z?: number,
-  w?: number,
-  h?: number, // height of visible area, not scrolled area
-  rate_scroll_click?: number,
-  pixel_scale?: number,
-  top_pad?: boolean, // set to false it the top/bottom "buttons" don't look like buttons
-  color?: Vec4,
-  background_color?: Vec4 | null,
-  auto_scroll?: boolean, // If true, will scroll to the bottom if the height changes and we're not actively scrolling
-  auto_hide?: boolean, // If true, will hide the scroll bar when the scroll area does not require it
-  no_disable?: boolean, // Use with auto_hide=false to always do scrolling actions (overscroll, mousewheel)
-  focusable_elem?: FocusableElement | null // Another element to call .focus() on if we think we are focused
-  min_dist?: number, // Minimum drag distance for background drag
-  disabled?: boolean,
+  z: number;
+  // h: number (from Box) is height of visible area, not interior scrolled area
+  rate_scroll_click: number;
+  pixel_scale: number;
+  top_pad: boolean; // set to false it the top/bottom "buttons" don't look like buttons
+  color: Vec4;
+  background_color: Vec4 | null;
+  auto_scroll: boolean; // If true, will scroll to the bottom if the height changes and we're not actively scrolling
+  auto_hide: boolean; // If true, will hide the scroll bar when the scroll area does not require it
+  no_disable: boolean; // Use with auto_hide=false to always do scrolling actions (overscroll, mousewheel)
+  focusable_elem: FocusableElement | null; // Another element to call .focus() on if we think we are focused
+  min_dist: number | undefined; // Minimum drag distance for background drag
+  disabled: boolean;
 
   // Calculated (only once) if not set
-  rate_scroll_wheel?: number,
-  rollover_color?: Vec4,
-  rollover_color_light?: Vec4,
-  disabled_color?: Vec4,
+  rate_scroll_wheel: number;
+  rollover_color: Vec4;
+  rollover_color_light: Vec4;
+  disabled_color: Vec4;
+}
+
+export type ScrollAreaOpts = Partial<ScrollAreaOptsAll>;
+
+export interface ScrollArea extends Readonly<ScrollAreaOptsAll> {
+  resetScroll(): void;
+  barWidth(): number;
+  isFocused(): boolean;
+  consumedClick(): boolean;
+  isVisible(): boolean;
+  begin(params?: ScrollAreaOpts): void;
+  // Includes overscroll - actual visible scroll pos for this frame
+  getScrollPos(): number;
+  keyboardScroll(): void;
+  end(h: number): void;
+  // h is height of visible area
+  scrollIntoFocus(miny: number, maxy: number, h: number): void;
 }
 
 let temp_pos = vec2();
 let last_scroll_area_id = 0;
-export class ScrollArea {
-  private id = `sa:${++last_scroll_area_id}`;
-  private x = 0;
-  private y = 0;
-  // TODO: figure out why this is causing the error "Property 'UI' does not exist on type 'typeof Z'"
-  private z = (Z as Record<string, number>).UI;
-  private w = 10;
-  private h = 10;
-  private rate_scroll_click = ui.font_height;
-  private pixel_scale = default_pixel_scale;
-  private top_pad = true;
-  private color = vec4(1,1,1,1);
-  private background_color: Vec4 | null = vec4(0.4, 0.4, 0.4, 1);
-  private auto_scroll = false;
-  private auto_hide = false;
-  private no_disable = false;
-  private focusable_elem: FocusableElement | null = null;
-  private min_dist?: number;
-  private disabled = false;
+class ScrollAreaInternal implements ScrollArea {
+  id = `sa:${++last_scroll_area_id}`;
+  x = 0;
+  y = 0;
+  z = Z.UI;
+  w = 10;
+  h = 10;
+  rate_scroll_click = uiTextHeight();
+  pixel_scale = default_pixel_scale;
+  top_pad = true;
+  color = vec4(1,1,1,1);
+  background_color: Vec4 | null = vec4(0.4, 0.4, 0.4, 1);
+  auto_scroll = false;
+  auto_hide = false;
+  no_disable = false;
+  focusable_elem: FocusableElement | null = null;
+  min_dist: number | undefined;
+  disabled = false;
 
   // Calculated (only once) if not set
-  private rate_scroll_wheel;
-  private rollover_color;
-  private rollover_color_light;
-  private disabled_color;
+  rate_scroll_wheel;
+  rollover_color;
+  rollover_color_light;
+  disabled_color;
 
   // run-time state
-  private scroll_pos = 0;
-  private overscroll = 0; // overscroll beyond beginning or end
-  private overscroll_delay = 0;
-  private grabbed_pos = 0;
-  private grabbed = false;
-  private consumed_click = false;
-  private drag_start: number | null = null;
-  private began = false;
-  private last_internal_h = 0;
-  private last_frame = 0;
-  private was_disabled = false;
-  private scrollbar_visible = false;
-  private last_max_value = 0;
+  scroll_pos = 0;
+  overscroll = 0; // overscroll beyond beginning or end
+  overscroll_delay = 0;
+  grabbed_pos = 0;
+  grabbed = false;
+  consumed_click = false;
+  drag_start: number | null = null;
+  began = false;
+  last_internal_h = 0;
+  last_frame = 0;
+  was_disabled = false;
+  scrollbar_visible = false;
+  last_max_value = 0;
+  ignore_this_fram_drag = false;
 
   constructor(params?: ScrollAreaOpts) {
     params = params || {};
@@ -137,7 +151,7 @@ export class ScrollArea {
 
   barWidth(): number {
     let { pixel_scale } = this;
-    let { scrollbar_top } = ui.sprites as UISprites;
+    let { scrollbar_top } = ui.sprites;
     return scrollbar_top.uidata.total_w * pixel_scale;
   }
 
@@ -157,11 +171,11 @@ export class ScrollArea {
   begin(params?: ScrollAreaOpts): void {
     this.applyParams(params);
     let { x, y, w, h, z, id } = this;
-    verify(!this.began); // Checking mismatched begin/end
+    // verify(!this.began); // Checking mismatched begin/end - likely from previous frame crash though!
     this.began = true;
     spotSubBegin({ x, y, w, h, key: id });
     // Set up camera and clippers
-    clipPush(z + 0.05, x, y, w - this.barWidth(), h);
+    spriteClipPush(z + 0.05, x, y, w - this.barWidth(), h);
     let camera_orig_x0 = camera2d.x0();
     let camera_orig_x1 = camera2d.x1();
     let camera_orig_y0 = camera2d.y0();
@@ -173,6 +187,7 @@ export class ScrollArea {
     let camera_new_y1 = camera_new_y0 + camera_orig_y1 - camera_orig_y0;
     camera2d.push();
     camera2d.set(camera_new_x0, camera_new_y0, camera_new_x1, camera_new_y1);
+    this.ignore_this_fram_drag = false;
   }
 
   // Includes overscroll - actual visible scroll pos for this frame
@@ -227,17 +242,22 @@ export class ScrollArea {
     let focused_sub_elem = spotSubEnd();
     // restore camera and clippers
     camera2d.pop();
-    clipPop();
+    spriteClipPop();
 
-    if (focused_sub_elem) {
+    if (focused_sub_elem && spotPadMode()) {
       // assumes the focus'd spot was in the same camera transform, if not, need to adapt to use .dom_pos instead
       this.scrollIntoFocus(focused_sub_elem.y, focused_sub_elem.y + focused_sub_elem.h + 1, this.h);
     }
 
     let maxvalue = max(h - this.h+1, 0);
-    if (this.scroll_pos >= maxvalue) {
-      // internal height must have shrunk
+    if (this.scroll_pos > maxvalue) {
+      // internal height must have shrunk, or we otherwise scrolled farther than allowed
+      let extra = this.scroll_pos - maxvalue;
       this.scroll_pos = max(0, maxvalue);
+      if (this.overscroll < 0) {
+        // Remove any overscroll that corresponds to this extra (e.g. from scrollIntoFocus)
+        this.overscroll = min(this.overscroll + extra, 0);
+      }
     }
 
     let was_at_bottom = this.scroll_pos === this.last_max_value;
@@ -260,9 +280,13 @@ export class ScrollArea {
       if (dt >= this.overscroll_delay) {
         this.overscroll_delay = 0;
         this.overscroll *= max(1 - dt * 0.008, 0);
+        if (abs(this.overscroll) < 0.001) {
+          this.overscroll = 0;
+        }
       } else {
         this.overscroll_delay -= dt;
       }
+      renderNeeded();
     }
 
     let {
@@ -274,7 +298,7 @@ export class ScrollArea {
 
     let {
       scrollbar_top, scrollbar_bottom, scrollbar_trough, scrollbar_handle, scrollbar_handle_grabber
-    } = ui.sprites as UISprites;
+    } = ui.sprites;
 
     let bar_w = scrollbar_top.uidata.total_w * pixel_scale;
     let button_h = min(scrollbar_top.uidata.total_h * pixel_scale, this.h / 3);
@@ -282,8 +306,9 @@ export class ScrollArea {
     let bar_x0 = this.x + this.w - bar_w;
     let handle_h = this.h / h; // How much of the area is visible
     handle_h = clamp(handle_h, 0, 1);
-    let handle_pos = (this.h > h) ? 0 : (this.scroll_pos / (h - this.h));
+    let handle_pos = (this.h >= h) ? 0 : (this.scroll_pos / (h - this.h));
     handle_pos = clamp(handle_pos, 0, 1);
+    assert(isFinite(handle_pos));
     let handle_pixel_h = handle_h * (this.h - button_h_nopad * 2);
     let handle_pixel_min_h = scrollbar_handle.uidata.total_h * pixel_scale;
     let trough_height = this.h - button_h * 2;
@@ -358,7 +383,7 @@ export class ScrollArea {
         if (up) {
           temp_pos[1] = up.pos[1];
           this.consumed_click = true;
-        } else if (!input.mouseDown({ button: 0 })) {
+        } else if (!input.mouseDownAnywhere(0)) {
           // released but someone else ate it, release anyway!
           this.grabbed = false;
           this.consumed_click = true;
@@ -367,7 +392,11 @@ export class ScrollArea {
         }
         if (this.grabbed) {
           let delta = temp_pos[1] - (this.y + button_h_nopad) - this.grabbed_pos;
-          this.scroll_pos = (h - this.h) * delta / (this.h - button_h_nopad * 2 - handle_pixel_h);
+          let denom = this.h - button_h_nopad * 2 - handle_pixel_h;
+          if (denom > 0) {
+            this.scroll_pos = (h - this.h) * delta / denom;
+            assert(isFinite(this.scroll_pos));
+          }
           handle_color = rollover_color_light;
         }
       }
@@ -383,7 +412,7 @@ export class ScrollArea {
         y: this.y,
         w: bar_w,
         h: button_h,
-        button: 0,
+        button: BUTTON_LEFT,
         pad_focusable: false,
         disabled: this.grabbed,
         disabled_focusable: false,
@@ -425,7 +454,7 @@ export class ScrollArea {
         y: this.y,
         w: bar_w,
         h: this.h,
-        button: 0,
+        button: BUTTON_LEFT,
         sound_rollover: null,
         pad_focusable: false,
         def: SPOT_DEFAULT_BUTTON,
@@ -435,16 +464,18 @@ export class ScrollArea {
         --bar_spot_ret.ret;
         gained_focus = true;
         this.consumed_click = true;
-        if (bar_spot_ret.pos[1] > handle_screenpos + handle_pixel_h/2) {
-          this.scroll_pos += this.h;
-        } else {
-          this.scroll_pos -= this.h;
+        if (bar_spot_ret.pos) {
+          if (bar_spot_ret.pos[1] > handle_screenpos + handle_pixel_h/2) {
+            this.scroll_pos += this.h;
+          } else {
+            this.scroll_pos -= this.h;
+          }
         }
       }
 
       // handle dragging the scroll area background
       let drag = input.drag({ x: this.x, y: this.y, w: this.w - bar_w, h: this.h, button: 0, min_dist: this.min_dist });
-      if (drag) {
+      if (drag && !this.ignore_this_fram_drag) {
         // Drag should not steal focus
         // This also fixes an interaction with chat_ui where clicking on the chat background (which causes
         //   a flicker of a drag) would cause pointer lock to be lost
@@ -529,6 +560,7 @@ export class ScrollArea {
       // Make it smooth/bouncy a bit
       this.overscroll = old_scroll_pos - this.scroll_pos;
     }
+    this.ignore_this_fram_drag = true;
   }
 
   scrollToEnd(): void {
@@ -542,5 +574,5 @@ export class ScrollArea {
 }
 
 export function scrollAreaCreate(params?: ScrollAreaOpts): ScrollArea {
-  return new ScrollArea(params);
+  return new ScrollAreaInternal(params);
 }

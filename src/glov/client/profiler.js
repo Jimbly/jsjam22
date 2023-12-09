@@ -17,7 +17,7 @@ export const MEM_DEPTH_DEFAULT = 2;
 
 const assert = require('assert');
 const engine = require('./engine.js');
-const { max } = Math;
+const { floor, max, min, round } = Math;
 
 // For profiler_ui.js
 const { localStorageGetJSON, localStorageSetJSON } = require('./local_storage.js');
@@ -113,11 +113,10 @@ let node_tick = new ProfilerEntry(root, 'tick');
 node_out_of_tick.next = node_tick;
 
 let current = root;
-let history_index = 0;
+let last_child = null;
+let history_index = 0; // index to the last written frame of data
 let paused = false;
 let mem_depth = MEM_DEPTH_DEFAULT;
-let total_calls = 0;
-let last_frame_total_calls = 0;
 
 function memSizeChrome() {
   return performance.memory.usedJSHeapSize;
@@ -127,10 +126,38 @@ function memSizeNop() {
 }
 let memSize = HAS_MEMSIZE ? memSizeChrome : memSizeNop;
 let mem_is_high_res = 10;
+
+export function profilerChildCallCount(node, with_mem, do_average) {
+  let walk = node.child;
+  let count = 0;
+  while (walk) {
+    if (do_average) {
+      let total = 0;
+      let sum_count = 0;
+      for (let ii = 0; ii < HIST_TOT; ii+=HIST_COMPONENTS) {
+        if (!with_mem || walk.history[ii+2]) {
+          sum_count++;
+          total += walk.history[ii]; // count
+        }
+      }
+      if (sum_count) {
+        count += round(total / sum_count);
+      }
+    } else {
+      if (!with_mem || walk.history[history_index + 2]) {
+        count += walk.history[history_index];
+      }
+    }
+    count += profilerChildCallCount(walk, with_mem, do_average);
+    walk = walk.next;
+  }
+  return count;
+}
 const WARN_CALLS_COUNT = 1000;
 export function profilerWarning() {
-  if (last_frame_total_calls > WARN_CALLS_COUNT) {
-    return `Warning: Too many per-frame profilerStart() calls (${last_frame_total_calls} > ${WARN_CALLS_COUNT})`;
+  let total_calls = profilerChildCallCount(root, false, true);
+  if (total_calls > WARN_CALLS_COUNT) {
+    return `Warning: Too many per-frame profilerStart() calls (${total_calls} > ${WARN_CALLS_COUNT})`;
   } else if (!HAS_MEMSIZE) {
     return 'To access memory profiling, run in Chrome';
   } else if (mem_depth > 1 && mem_is_high_res < 10) {
@@ -149,9 +176,9 @@ export function profilerHistoryIndex() {
   return history_index;
 }
 
+let garbage_accum = [0, 0];
+let garbage_count = [0, 0, 0];
 export function profilerFrameStart() {
-  last_frame_total_calls = total_calls;
-  total_calls = 0;
   root.count = 1;
   let now = performance.now();
   root.time = now - root.start_time;
@@ -182,9 +209,28 @@ export function profilerFrameStart() {
       }
     }
   }
+  let pos = 0;
+  let neg = 0;
+  for (let walk = root.child; walk; walk = walk.next) {
+    if (walk.dmem < 0) {
+      neg -= walk.dmem;
+    } else {
+      pos += walk.dmem;
+    }
+  }
+  if (pos > neg) {
+    garbage_accum[0] += pos;
+    garbage_count[0]++;
+  } else {
+    garbage_accum[1] += neg;
+    garbage_count[1]++;
+  }
   if (current !== root) {
     console.error('Profiler starting new frame but some section was not stopped', current && current.name);
     current = root;
+  }
+  if (!paused) {
+    history_index = (history_index + HIST_COMPONENTS) % HIST_TOT;
   }
   let walk = root;
   while (walk) {
@@ -212,35 +258,39 @@ export function profilerFrameStart() {
       break;
     } while (true);
   }
-  if (!paused) {
-    history_index = (history_index + HIST_COMPONENTS) % HIST_TOT;
-  }
 }
 
 function profilerStart(name) {
-  ++total_calls;
-
   // Find us in current's children
-  let last = null;
   let instance;
-  for (instance = current.child; instance; last = instance, instance = instance.next) {
-    if (instance.name === name) {
-      break;
-    }
-  }
-  if (!instance) {
-    if (!last) {
-      // No children yet
-      assert(!current.child);
-      instance = new ProfilerEntry(current, name);
-      current.child = instance;
-    } else {
-      instance = new ProfilerEntry(current, name);
-      last.next = instance;
-    }
+  if (last_child && last_child.name === name) {
+    instance = last_child;
+  } else if (last_child && last_child.next && last_child.next.name === name) {
+    instance = last_child.next;
   } else {
-    assert(instance.parent === current);
+    let last = null;
+    for (instance = current.child; instance; last = instance, instance = instance.next) {
+      if (instance.name === name) {
+        break;
+      }
+    }
+    if (!instance) {
+      if (!last) {
+        // No children yet
+        assert(!current.child);
+        instance = new ProfilerEntry(current, name);
+        current.child = instance;
+      } else if (last_child) {
+        instance = new ProfilerEntry(current, name);
+        instance.next = last_child.next;
+        last_child.next = instance;
+      } else {
+        instance = new ProfilerEntry(current, name);
+        last.next = instance;
+      }
+    }
   }
+  assert(instance.parent === current);
   // instance is set to us now!
 
   current = instance;
@@ -248,9 +298,10 @@ function profilerStart(name) {
   if (instance.depth < mem_depth) {
     instance.start_mem = memSize();
   }
+  last_child = null;
 }
 
-function profilerStop(old_name, count) {
+function profilerStop(old_name) {
   if (old_name) {
     assert.equal(old_name, current.name);
   }
@@ -258,13 +309,14 @@ function profilerStop(old_name, count) {
   if (current.depth < mem_depth) {
     current.dmem += memSize() - current.start_mem;
   }
-  current.count += count || 1;
+  current.count++;
+  last_child = current;
   current = current.parent;
 }
 
-function profilerStopStart(name, count) {
+function profilerStopStart(name) {
   // TODO: only sample timestamp once
-  profilerStop(null, count);
+  profilerStop(null);
   profilerStart(name);
 }
 
@@ -289,8 +341,75 @@ export function profilerMemDepthSet(value) {
   mem_depth = value;
 }
 
-export function profilerTotalCalls() {
-  return last_frame_total_calls;
+let bloat_inner = { time: 0, mem: 0 };
+let bloat_outer = { time: 0, mem: 0 };
+let bloat = { inner: bloat_inner, outer: bloat_outer };
+const MEASURE_KEY1 = 'profilerMeasureBloat';
+const MEASURE_KEY2 = 'profilerMeasureBloat:child';
+const MEASURE_HIST = 10;
+export function profilerMeasureBloat() {
+  let mem_depth_saved = mem_depth;
+  if (mem_depth >= 2) {
+    mem_depth = Infinity;
+  }
+  profilerStart(MEASURE_KEY1);
+  profilerStart(MEASURE_KEY2);
+  profilerStopStart(MEASURE_KEY2);
+  profilerStopStart(MEASURE_KEY2);
+  profilerStopStart(MEASURE_KEY2);
+  profilerStop(MEASURE_KEY2);
+  profilerStop(MEASURE_KEY1);
+  mem_depth = mem_depth_saved;
+
+  let walk = null;
+  for (walk = current.child; walk.name !== MEASURE_KEY1; walk = walk.next) {
+    // just walk until we find it, should just be the first entry, though!
+  }
+  let child = walk.child;
+  assert.equal(child.name, MEASURE_KEY2);
+  bloat_inner.time = Infinity;
+  bloat_inner.mem = 0;
+  bloat_outer.time = Infinity;
+  bloat_outer.mem = 0;
+  let count_mem = 0;
+  let idx_start = ((history_index - HIST_COMPONENTS * (MEASURE_HIST - 1)) + HIST_TOT) % HIST_TOT;
+  for (let offs = 0; offs < MEASURE_HIST; offs++) {
+    let idx = (idx_start + offs * HIST_COMPONENTS) % HIST_TOT;
+    bloat_inner.time = min(bloat_inner.time, child.history[idx+1]);
+    bloat_outer.time = min(bloat_outer.time, walk.history[idx+1]);
+    if (child.history[idx+2] > 0 && walk.history[idx+2] > 0) {
+      bloat_inner.mem += child.history[idx+2];
+      bloat_outer.mem += walk.history[idx+2];
+      ++count_mem;
+    }
+  }
+  bloat_inner.time /= 4;
+  bloat_outer.time = max(0, bloat_outer.time - bloat_inner.time) / 4;
+  let avg_inner_mem = bloat_inner.mem / count_mem / 4;
+  bloat_outer.mem = count_mem ? max(0, floor((bloat_outer.mem / count_mem - avg_inner_mem) / 4)) : 0;
+  bloat_inner.mem = count_mem ? max(0, floor(avg_inner_mem)) : 0;
+  // Code above semi-accurately measures the bloat in small scales, but seems
+  //   to overestimate on the grand scale (possibly some measurements are being
+  //   optimized away?), so, using this default value for memory instead
+  //   as measured Chrome 103 as an average over ~800 profiler calls in a
+  //   real app.
+  // On second consideration, not doing this: memory profiling is most useful when
+  //   looking at the leaf nodes, and the measured values best match the leaf
+  //   node values.
+  // bloat_outer.mem = 56;
+  return bloat;
+}
+
+export function profilerGarbageEstimate() {
+  let ret;
+  if (garbage_count[0] > garbage_count[1]) {
+    ret = garbage_accum[0] / garbage_count[0];
+  } else {
+    ret = garbage_accum[1] / garbage_count[1];
+  }
+  garbage_count[0] = garbage_count[1] = 0;
+  garbage_accum[0] = garbage_accum[1] = 0;
+  return ret;
 }
 
 export function profilerWalkTree(use_root, cb) {
@@ -342,12 +461,29 @@ export function profilerMaxMem(entry) {
   return dmem_max;
 }
 
+export function profilerAvgMem(entry) {
+  let dmem_avg = 0;
+  let dmem_count = 0;
+  for (let ii = 0; ii < HIST_TOT; ii+=HIST_COMPONENTS) {
+    if (entry.history[ii]) {
+      let dmem = entry.history[ii+2];
+      if (dmem >= 0) {
+        dmem_avg += dmem;
+        dmem_count++;
+      }
+    }
+  }
+  if (dmem_count) {
+    dmem_avg /= dmem_count;
+  }
+  return dmem_avg;
+}
+
 export function profilerExport() {
   let obj = {
     history_index,
     root,
     mem_depth: HAS_MEMSIZE ? mem_depth : 0,
-    calls: last_frame_total_calls,
     // Include some device info
     device: {
       ua: window.navigator.userAgent,

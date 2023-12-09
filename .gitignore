@@ -6,6 +6,7 @@ ynpm-debug.log
 npm-debug.log
 build.dev/
 build.prod/
+build.test/
 .gbstate/
 *.sublime-workspace
 Bfxr

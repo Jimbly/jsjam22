@@ -1,31 +1,47 @@
 // Portions Copyright 2019 Jimb Esser (https://github.com/Jimbly/)
 // Released under MIT License: https://opensource.org/licenses/MIT
 
-/* eslint-disable import/order */
-import { FriendStatus } from 'glov/common/friends_data.js';
-
-const assert = require('assert');
-const { ChannelWorker } = require('./channel_worker.js');
-const {
-  ID_PROVIDER_APPLE,
-  ID_PROVIDER_FB_GAMING,
-  ID_PROVIDER_FB_INSTANT,
+import assert from 'assert';
+import * as base32 from 'glov/common/base32';
+import * as dot_prop from 'glov/common/dot-prop';
+import {
+  PRESENCE_INACTIVE,
   PRESENCE_OFFLINE,
-} = require('glov/common/enums.js');
-const master_worker = require('./master_worker.js');
-const md5 = require('glov/common/md5.js');
-const metrics = require('./metrics.js');
-const { isProfane, isReserved } = require('glov/common/words/profanity_common.js');
-const random_names = require('./random_names.js');
-const { deprecate, sanitize } = require('glov/common/util.js');
+} from 'glov/common/enums.js';
+import { FriendStatus } from 'glov/common/friends_data.js';
+import * as md5 from 'glov/common/md5.js';
+import {
+  EMAIL_REGEX,
+  deprecate,
+  empty,
+  sanitize,
+} from 'glov/common/util.js';
+import { isProfane, isReserved } from 'glov/common/words/profanity_common.js';
+
+import { channelServerWorkerInit } from './channel_server_worker.js';
+import { ChannelWorker } from './channel_worker.js';
+import { globalWorkerInit } from './global_worker.js';
+import {
+  keyMetricsStartup,
+  usertimeEnd,
+  usertimeStart,
+} from './key_metrics.js';
+import * as master_worker from './master_worker.js';
+import { metricsAdd } from './metrics.js';
+import * as random_names from './random_names.js';
+import { serverConfig } from './server_config';
 
 deprecate(exports, 'handleChat', 'chattable_worker:handleChat');
 
+const { floor, random } = Math;
+
 const DISPLAY_NAME_MAX_LENGTH = 30;
 const DISPLAY_NAME_WAITING_PERIOD = 23 * 60 * 60 * 1000;
-const email_regex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MAX_FRIENDS = 100;
 const FRIENDS_DATA_KEY = 'private.friends';
+
+let access_token_fns;
+let access_token_regex;
 
 export const regex_valid_username = /^[a-z][a-z0-9_]{1,32}$/;
 const regex_valid_user_id = /^(?:fb\$|[a-z0-9])[a-z0-9_]{1,32}$/;
@@ -35,25 +51,38 @@ export function validUserId(user_id) {
   return user_id?.match(regex_valid_user_id);
 }
 
-export function validProvider(provider) {
-  switch (provider) {
-    case ID_PROVIDER_APPLE:
-    case ID_PROVIDER_FB_GAMING:
-    case ID_PROVIDER_FB_INSTANT:
-      return true;
-    default:
-      return false;
-  }
+let valid_provider_ids = Object.create(null);
+export function registerValidIDProvider(key) {
+  valid_provider_ids[key] = true;
+}
+function validProvider(provider) {
+  return valid_provider_ids[provider] || false;
 }
 
 export function validExternalId(external_id) {
   return external_id.match(regex_valid_external_id);
 }
 
-function validDisplayName(display_name, is_sysadmin) {
+function getDisplayNameBypass(source) {
+  let display_name_bypass_flags = serverConfig().display_name_bypass_flags;
+  for (let ii = 0; ii < display_name_bypass_flags.length; ++ii) {
+    let flag = display_name_bypass_flags[ii];
+    if (source[flag]) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// First character must not be a bracket (confusing messages with `/me`)
+const valid_display_name = /^[^[\]]/;
+
+function validDisplayName(display_name, override) {
   if (!display_name || sanitize(display_name).trim() !== display_name ||
     isProfane(display_name) || display_name.length > DISPLAY_NAME_MAX_LENGTH ||
-    (!is_sysadmin && isReserved(display_name))
+    EMAIL_REGEX.test(display_name) ||
+    !valid_display_name.test(display_name) ||
+    (!override && isReserved(display_name))
   ) {
     return false;
   }
@@ -95,6 +124,19 @@ export class DefaultUserWorker extends ChannelWorker {
     this.presence_data = {}; // client_id -> data
     this.presence_idx = 0;
     this.my_clients = {};
+    this.last_abtests = '';
+    this.last_usertime_active = false;
+    this.last_usertime_abtests = '';
+
+    // Migration logic for engine-level fields
+    if (this.exists()) {
+      let creation_time_old = this.getChannelData('private.creation_time');
+      if (creation_time_old) {
+        this.setChannelData('public.creation_time', creation_time_old);
+        this.setChannelData('private.creation_time', undefined);
+      }
+    }
+
   }
 
   migrateFriendsList(legacy_friends) {
@@ -116,7 +158,7 @@ export class DefaultUserWorker extends ChannelWorker {
             friend = createFriendData(status);
             // Note: If the friend status is added-auto or removed, it must have been added through FB Instant,
             // so we can use its FB Instant id.
-            setFriendExternalId(friend, ID_PROVIDER_FB_INSTANT, fbinstant_friend_id);
+            setFriendExternalId(friend, 'fbi', fbinstant_friend_id);
           } else {
             // Unknown FB Instant friend id, so remove it and let it be re-added by the client.
             // This may cause occasional cases of manually removed friends to reappear as added-auto.
@@ -179,7 +221,8 @@ export class DefaultUserWorker extends ChannelWorker {
     if (!new_name) {
       return resp_func('Missing name');
     }
-    if (!validDisplayName(new_name, this.cmd_parse_source.sysadmin)) {
+    let display_name_bypass = getDisplayNameBypass(this.cmd_parse_source);
+    if (!validDisplayName(new_name, display_name_bypass)) {
       return resp_func('Invalid display name');
     }
     let old_name = this.getChannelData('public.display_name');
@@ -190,7 +233,7 @@ export class DefaultUserWorker extends ChannelWorker {
     let now = Date.now();
     let last_change = this.getChannelData('private.display_name_change');
     if (last_change && now - last_change < DISPLAY_NAME_WAITING_PERIOD && !unimportant &&
-      !this.cmd_parse_source.sysadmin
+      !display_name_bypass
     ) {
       return resp_func('You must wait 24h before changing your display name again');
     }
@@ -330,6 +373,92 @@ export class DefaultUserWorker extends ChannelWorker {
       this.clearPresenceToUser(user_id);
     });
   }
+  cmdAccessToken(access_token/*: string*/, resp_func/*: HandlerCallback<UnimplementedData>*/) {
+    let source = this.cmd_parse_source;
+    if (source.user_id !== this.user_id) {
+      return void resp_func('ERR_INVALID_USER');
+    }
+
+    if (!access_token || typeof access_token !== 'string') {
+      return void resp_func('ERR_MISSING_TOKEN');
+    }
+
+    this.logSrc(source, `access_token "${access_token}"`);
+    access_token = base32.cannonize(access_token);
+    if (!access_token) {
+      return void resp_func('ERR_MALFORMED_TOKEN');
+    }
+    // Determine type of token
+    let m = access_token.match(access_token_regex);
+    if (!m || m[3].length < 8) {
+      return void resp_func('ERR_MALFORMED_TOKEN');
+    }
+    let type = m[1];
+    let target = m[2];
+    let body = m[3];
+    let fn = access_token_fns[type];
+    assert(fn); // shouldn't pass the regex otherwise
+    fn.call(this, target, body, resp_func);
+  }
+  applyTokenPerm(target/*:string*/, perm_token/*: string*/, resp_func/*: HandlerCallback<UnimplementedData>*/) {
+    let source = this.cmd_parse_source;
+    if (target) {
+      return void resp_func('ERR_INVALID_DATA');
+    }
+    let key = `private.tokens.${perm_token}`;
+    this.sendChannelMessage('perm_token.perm_token', 'get_channel_data', key,
+      (err/*?: string*/, resp_data/*?: UnimplementedData*/) => {
+        if (err) {
+          return void resp_func(err);
+        }
+        if (!resp_data) {
+          return void resp_func('ERR_INVALID_TOKEN');
+        }
+        assert(Array.isArray(resp_data.ops));
+        let ops = resp_data.ops/* as UnimplementedData[]*/;
+        if (resp_data.claimed) {
+          // Really, was in process of being claimed, could perhaps re-apply if it was us that was doing the original
+          // applying.
+          return void resp_func('ERR_ALREADY_CLAIMED');
+        }
+        this.logSrc(source, `Claiming token ${perm_token} for ${JSON.stringify(ops)}`);
+        // Atomically claim (but not atomically applying to user)
+        // Could be conservative and apply to user, try to claim
+        let pak = this.pak('perm_token.perm_token', 'set_channel_data_if');
+        pak.writeAnsiString(`${key}.claimed`);
+        pak.writeJSON(1); // value
+        pak.writeJSON(0); // set_if
+        pak.send((err/*?: string*/) => {
+          if (err) {
+            return resp_func(err);
+          }
+          // Apply
+          let perm = this.getChannelData('public.permissions', {});
+          for (let ii = 0; ii < ops.length; ++ii) {
+            let op = ops[ii];
+            assert(op.key);
+            let value = op.value;
+            switch (op.op) {
+              case 'add':
+                dot_prop.set(perm, op.key, (dot_prop.get(perm, op.key) || 0) + value);
+                break;
+              case 'set':
+                dot_prop.set(perm, op.key, value);
+                break;
+              default:
+                console.error(resp_data);
+                assert(0);
+            }
+          }
+          this.setChannelData('public.permissions', perm);
+          // Also delete token from global
+          this.setChannelDataOnOther('perm_token.perm_token', `${key}`, undefined);
+          this.logSrc(source, `Claimed token ${perm_token}`);
+          return resp_func(null, `Successfully applied permissions token ${perm_token}`);
+        });
+      });
+  }
+
   cmdChannelDataGet(param, resp_func) {
     if (this.cmd_parse_source.user_id !== this.user_id) {
       return void resp_func('ERR_INVALID_USER');
@@ -444,7 +573,10 @@ export class DefaultUserWorker extends ChannelWorker {
       return void resp_func(null, {});
     }
 
-    this.sendChannelMessage('idmapper.idmapper', 'id_map_get_multiple_ids', { provider, provider_ids: friends_to_add },
+    this.sendChannelMessage(
+      'idmapper.idmapper',
+      'id_map_get_multiple_ids',
+      { provider, provider_ids: friends_to_add, get_deleted: true },
       (err, id_mappings) => {
         if (err) {
           this.error(`Error getting id maps for ${this.user_id} ${provider} friends: ${err}`);
@@ -481,6 +613,52 @@ export class DefaultUserWorker extends ChannelWorker {
     // Also return display name and any other relevant info?
     return resp_func();
   }
+  checkAutoIPBan(login_ip) {
+    if (!this.getChannelData('private.auto_ip_ban')) {
+      return;
+    }
+    this.error(`Queuing delayed automatic IP ban for account ${this.user_id} from IP ${login_ip}`);
+    setTimeout(() => {
+      if (this.shutting_down) {
+        return;
+      }
+      this.error(`Executing automatic IP ban for account ${this.user_id} from IP ${login_ip}`);
+      let ids_saved = this.ids;
+      this.ids = { user_id: '$system', csr: 1 };
+      this.sendChannelMessage('global.global', 'cmdparse', `ipban ${login_ip}`, (err) => {
+        if (err) {
+          this.error(`Error executing automatic IP ban for account ${this.user_id} from IP ${login_ip}: ${err}`);
+        }
+      });
+      this.ids = ids_saved;
+    }, floor(3*60*1000 + random() * 2*60*1000));
+  }
+  handleLoginShared(data, resp_func) {
+    this.setChannelData('private.login_ip', data.ip);
+    this.setChannelData('private.login_ua', data.ua);
+    this.setChannelData('private.login_time', Date.now());
+
+    let display_name = this.getChannelData('public.display_name');
+    let permissions = this.getChannelData('public.permissions', {});
+    let display_name_bypass = getDisplayNameBypass(permissions);
+    if (!validDisplayName(display_name, display_name_bypass)) {
+      // Old data with no display_name, or valid display name rules have changed
+      let new_display_name = this.user_id;
+      if (!validDisplayName(new_display_name)) {
+        new_display_name = random_names.get();
+      }
+      this.log(`Invalid display name ("${display_name}") on user ${this.user_id}` +
+        ` detected, changing to "${new_display_name}"`);
+      this.setChannelData('public.display_name', new_display_name);
+    }
+    this.checkAutoIPBan(data.ip);
+    metricsAdd('user.login', 1);
+
+    resp_func(null, {
+      public_data: this.getChannelData('public'),
+      email: this.getChannelData('private.email'),
+    });
+  }
   handleLogin(src, data, resp_func) {
     if (this.channel_server.restarting) {
       if (!this.getChannelData('public.permissions.sysadmin')) {
@@ -492,43 +670,53 @@ export class DefaultUserWorker extends ChannelWorker {
       return resp_func('Missing password');
     }
 
+    if (this.getChannelData('private.password_deleted')) {
+      return resp_func('ERR_ACCOUNT_MIGRATED');
+    }
     if (!this.getChannelData('private.password')) {
       return resp_func('ERR_USER_NOT_FOUND');
+    }
+    if (this.getChannelData('public.banned')) {
+      return resp_func('ERR_ACCOUNT_BANNED');
     }
     if (md5(data.salt + this.getChannelData('private.password')) !== data.password) {
       return resp_func('Invalid password');
     }
-    this.setChannelData('private.login_ip', data.ip);
-    this.setChannelData('private.login_ua', data.ua);
-    let display_name = this.getChannelData('public.display_name');
-    if (!validDisplayName(display_name, this.getChannelData('public.permissions.sysadmin'))) {
-      // Old data with no display_name, or valid display name rules have changed
-      let new_display_name = this.user_id;
-      if (!validDisplayName(new_display_name)) {
-        new_display_name = random_names.get();
-      }
-      this.log(`Invalid display name ("${display_name}") on user ${this.user_id}` +
-        ` detected, changing to "${new_display_name}"`);
-      this.setChannelData('public.display_name', new_display_name);
-    }
-
-    this.setChannelData('private.login_time', Date.now());
-    metrics.add('user.login', 1);
-    return resp_func(null, this.getChannelData('public'));
+    metricsAdd('user.login_pass', 1);
+    return this.handleLoginShared(data, resp_func);
   }
   handleLoginExternal(src, data, resp_func) {
+    if (this.channel_server.restarting) {
+      if (!this.getChannelData('public.permissions.sysadmin')) {
+        // Maybe black-hole like other messages instead?
+        return resp_func('ERR_RESTARTING');
+      }
+    }
+
     //Should the authentication step happen here instead?
-    if (!this.getChannelData('private.external')) {
+
+    assert(data.provider_ids);
+    for (let provider in data.provider_ids) {
+      let provider_id = data.provider_ids[provider];
+      let provider_key = `private.login_${provider}`;
+      let previous_id = this.getChannelData(provider_key);
+      if (previous_id) {
+        assert(provider_id === previous_id,
+          `Multiple external ids for user ${this.user_id} and provider ${provider}: ${previous_id}, ${provider_id}`);
+      } else {
+        this.setChannelData(provider_key, provider_id);
+      }
+    }
+
+    if (this.getChannelData('public.banned')) {
+      return resp_func('ERR_ACCOUNT_BANNED');
+    }
+    if (!this.exists()) {
       this.setChannelData('private.external', true);
       return this.createShared(data, resp_func);
     }
-    this.setChannelData('private.login_ip', data.ip);
-    this.setChannelData('private.login_ua', data.ua);
-    this.setChannelData('private.login_time', Date.now());
-    this.setChannelData(`private.login_${data.provider}`, data.provider_id);
-    metrics.add('user.login', 1);
-    metrics.add(`user.login_${data.provider}`, 1);
-    return resp_func(null, this.getChannelData('public'));
+    metricsAdd(`user.login_${data.provider}`, 1);
+    return this.handleLoginShared(data, resp_func);
   }
   handleCreate(src, data, resp_func) {
     if (this.exists()) {
@@ -537,7 +725,7 @@ export class DefaultUserWorker extends ChannelWorker {
     if (!data.password) {
       return resp_func('Missing password');
     }
-    if (this.require_email && !email_regex.test(data.email)) {
+    if (this.require_email && !EMAIL_REGEX.test(data.email)) {
       return resp_func('Email invalid');
     }
     if (!validDisplayName(data.display_name)) {
@@ -560,18 +748,70 @@ export class DefaultUserWorker extends ChannelWorker {
     if (!validDisplayName(public_data.display_name)) { // If from external auth
       public_data.display_name = random_names.get();
     }
+    public_data.creation_time = Date.now();
     private_data.password = data.password;
-    private_data.email = data.email;
+    private_data.email = data.email || private_data.email;
     private_data.creation_ip = data.ip;
-    private_data.creation_time = Date.now();
     private_data.login_ip = data.ip;
     private_data.login_ua = data.ua;
     private_data.login_time = Date.now();
     this.setChannelData('private', private_data);
     this.setChannelData('public', public_data);
-    metrics.add('user.create', 1);
-    return resp_func(null, this.getChannelData('public'));
+    metricsAdd('user.create', 1);
+    return resp_func(null, {
+      public_data: this.getChannelData('public'),
+      first_session: true,
+      email: this.getChannelData('private.email'),
+    });
   }
+
+  handleReplacePasswordWithExternal(src, { password, provider, provider_id, salt }, resp_func) {
+    if (!this.exists()) {
+      return resp_func('Account does not exists');
+    }
+    if (!password) {
+      return resp_func('Missing password');
+    }
+    if (!provider || !provider_id) {
+      return resp_func('Missing provider/provider_id', provider, provider_id);
+    }
+    let private_data = this.getChannelData('private');
+    if (md5(salt + private_data.password) !== password) {
+      return resp_func('Password mismatch');
+    }
+    private_data.password_deleted = private_data.password;
+    private_data.password = undefined;
+    private_data[`login_${provider}`] = provider_id;
+    private_data.external = true;
+    this.setChannelData('private', private_data);
+
+    return resp_func(null, true);
+  }
+
+  handleSetExternal(src, data, resp_func) {
+    if (!data.provider || !data.provider_id) {
+      return resp_func('Missing provider/provider_id', data.provider, data.provider_id);
+    }
+    this.setChannelData(`private.login_${data.provider}`, data.provider_id);
+    this.setChannelData('private.external', true);
+    return resp_func(null, true);
+  }
+
+  handleSetEmail(src, email, resp_func) {
+    if (!email) {
+      return resp_func('Missing email');
+    }
+    if (!EMAIL_REGEX.test(email)) {
+      return resp_func('Invalid email');
+    }
+    if (email === this.data.private.email) {
+      return resp_func(null, true);
+    }
+    this.logSrc(src, `Updating user ${this.user_id} email from ${this.data.private.email} to ${email}`);
+    this.setChannelData('private.email', email);
+    return resp_func(null, true);
+  }
+
   handleSetChannelData(src, key, value) {
     let err = this.defaultHandleSetChannelData(src, key, value);
     if (err) {
@@ -622,6 +862,34 @@ export class DefaultUserWorker extends ChannelWorker {
       }
     }
   }
+
+  updateUsertimeMetrics() {
+    let currently_active = false;
+    if (this.rich_presence) {
+      for (let channel_id in this.presence_data) {
+        let presence = this.presence_data[channel_id];
+        if (presence.active !== PRESENCE_INACTIVE) {
+          currently_active = true;
+          break;
+        }
+      }
+    } else {
+      currently_active = !empty(this.my_clients);
+    }
+
+    if (this.last_usertime_active && (
+      !currently_active || this.last_abtests !== this.last_usertime_abtests
+    )) {
+      this.last_usertime_active = false;
+      usertimeEnd(this.last_usertime_abtests);
+    }
+    if (!this.last_usertime_active && currently_active) {
+      this.last_usertime_active = true;
+      this.last_usertime_abtests = this.last_abtests;
+      usertimeStart(this.last_usertime_abtests);
+    }
+  }
+
   handleClientDisconnect(src) {
     if (this.rich_presence && this.presence_data[src.channel_id]) {
       delete this.presence_data[src.channel_id];
@@ -630,11 +898,32 @@ export class DefaultUserWorker extends ChannelWorker {
     if (this.my_clients[src.channel_id]) {
       delete this.my_clients[src.channel_id];
     }
+    this.updateUsertimeMetrics();
+  }
+  handlePresenceGet(src, pak, resp_func) {
+    if (!this.exists()) {
+      return void resp_func('ERR_USER_NOT_FOUND');
+    }
+    if (!this.rich_presence) {
+      return void resp_func('ERR_NO_RICH_PRESENCE');
+    }
+    let friends = this.getFriendsList();
+    if (friends[src.user_id]?.status === FriendStatus.Blocked) {
+      return void resp_func(null, {});
+    }
+    resp_func(null, this.presence_data);
   }
   handlePresenceSet(src, pak, resp_func) {
     let active = pak.readInt();
     let state = pak.readAnsiString(); // app-defined state
     let payload = pak.readJSON();
+    let abtests = '';
+    if (!pak.ended()) {
+      abtests = pak.readAnsiString();
+      if (active !== PRESENCE_INACTIVE) {
+        this.last_abtests = abtests;
+      }
+    }
     if (!this.rich_presence) {
       return void resp_func('ERR_NO_RICH_PRESENCE');
     }
@@ -648,10 +937,11 @@ export class DefaultUserWorker extends ChannelWorker {
         id: ++this.presence_idx, // Timestamp would work too for ordering, but this is more concise
         active,
         state,
-        payload
+        payload,
       };
     }
     this.updatePresence();
+    this.updateUsertimeMetrics();
     resp_func();
   }
   sendMessageToMyClients(message, payload, exclude_channel_id) {
@@ -664,10 +954,11 @@ export class DefaultUserWorker extends ChannelWorker {
   handleCSRAdminToUser(src, pak, resp_func) {
     let access = pak.readJSON();
     let cmd = pak.readString();
+    let desired_client_id = pak.readAnsiString();
     if (!this.exists()) {
       return void resp_func('ERR_INVALID_USER');
     }
-    if (!src.sysadmin) {
+    if (!src.sysadmin && !src.csr) {
       return void resp_func('ERR_ACCESS_DENIED');
     }
     // first, try running here on a (potentially offline) user
@@ -683,10 +974,15 @@ export class DefaultUserWorker extends ChannelWorker {
       // not found
       // find a client worker for this user
       let to_use;
-      for (let channel_id in this.my_clients) {
-        to_use = channel_id;
-        if (channel_id !== src.channel_id) {
-          break;
+      let desired_channel_id = desired_client_id ? `client.${desired_client_id}` : '';
+      if (desired_channel_id && this.my_clients[desired_channel_id]) {
+        to_use = desired_channel_id;
+      } else {
+        for (let channel_id in this.my_clients) {
+          to_use = channel_id;
+          if (channel_id !== src.channel_id) {
+            break;
+          }
         }
       }
       if (!to_use) {
@@ -705,23 +1001,6 @@ DefaultUserWorker.prototype.auto_destroy = true;
 DefaultUserWorker.prototype.require_email = true;
 DefaultUserWorker.prototype.rich_presence = true;
 DefaultUserWorker.prototype.maintain_client_list = true; // needed for rich_presence features
-
-class ChannelServerWorker extends ChannelWorker {
-}
-// Returns a function that forwards to a method of the same name on the ChannelServer
-function channelServerBroadcast(name) {
-  return (ChannelServerWorker.prototype[name] = function (src, data, resp_func) {
-    assert(!resp_func.expecting_response); // this is a broadcast
-    this.channel_server[name](data);
-  });
-}
-function channelServerHandler(name) {
-  return (ChannelServerWorker.prototype[name] = function (src, data, resp_func) {
-    this.channel_server[name](data, resp_func);
-  });
-}
-
-ChannelServerWorker.prototype.no_datastore = true; // No datastore instances created here as no persistence is needed
 
 let inited = false;
 let user_worker = DefaultUserWorker;
@@ -754,6 +1033,10 @@ let user_worker_init_data = {
     help: 'Reset a user to allow seeing your rich presence again',
     func: DefaultUserWorker.prototype.cmdFriendUnblock,
   },{
+    cmd: 'access_token',
+    help: 'Apply an access token',
+    func: DefaultUserWorker.prototype.cmdAccessToken,
+  },{
     cmd: 'channel_data_get',
     help: '(Admin) Get from a channel\'s metadata',
     usage: '$HELP\n/channel_data_get channel_id field.name',
@@ -771,12 +1054,19 @@ let user_worker_init_data = {
     login: DefaultUserWorker.prototype.handleLogin,
     create: DefaultUserWorker.prototype.handleCreate,
     user_ping: DefaultUserWorker.prototype.handleUserPing,
+    replace_password_with_external: DefaultUserWorker.prototype.handleReplacePasswordWithExternal,
+    set_external: DefaultUserWorker.prototype.handleSetExternal,
+    set_email: DefaultUserWorker.prototype.handleSetEmail,
   },
   client_handlers: {
     friend_auto_update: DefaultUserWorker.prototype.handleFriendAutoUpdate,
     friend_list: DefaultUserWorker.prototype.handleFriendList,
+    presence_get: DefaultUserWorker.prototype.handlePresenceGet,
     presence_set: DefaultUserWorker.prototype.handlePresenceSet,
     csr_admin_to_user: DefaultUserWorker.prototype.handleCSRAdminToUser,
+  },
+  access_tokens: {
+    P: DefaultUserWorker.prototype.applyTokenPerm,
   },
 };
 export function overrideUserWorker(new_user_worker, extra_data) {
@@ -802,19 +1092,16 @@ export function overrideUserWorker(new_user_worker, extra_data) {
 
 export function init(channel_server) {
   inited = true;
+  let token_keys = [];
+  access_token_fns = user_worker_init_data.access_tokens;
+  for (let key in access_token_fns) {
+    assert(access_token_fns[key]);
+    token_keys.push(key);
+  }
+  access_token_regex = new RegExp(`^([${token_keys.join('')}])([^Z]*)Z([0-9A-Z]+)$`);
   channel_server.registerChannelWorker('user', user_worker, user_worker_init_data);
-  channel_server.registerChannelWorker('channel_server', ChannelServerWorker, {
-    autocreate: false,
-    subid_regex: /^[a-zA-Z0-9-]+$/,
-    handlers: {
-      worker_create: channelServerHandler('handleWorkerCreate'),
-      master_startup: channelServerBroadcast('handleMasterStartup'),
-      master_stats: channelServerBroadcast('handleMasterStats'),
-      restarting: channelServerBroadcast('handleRestarting'),
-      chat_broadcast: channelServerBroadcast('handleChatBroadcast'),
-      ping: channelServerBroadcast('handlePing'),
-      eat_cpu: channelServerHandler('handleEatCPU'),
-    },
-  });
+  channelServerWorkerInit(channel_server);
+  globalWorkerInit(channel_server);
   master_worker.init(channel_server);
+  keyMetricsStartup(channel_server);
 }

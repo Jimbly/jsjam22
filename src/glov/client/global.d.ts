@@ -1,3 +1,4 @@
+/* eslint-env browser */
 declare module 'glov/client/global' {
   global {
     interface Window {
@@ -5,22 +6,23 @@ declare module 'glov/client/global' {
       conf_platform?: string;
       conf_env?: string;
 
-      // External injected variables
-      FB?: unknown;
-      FBInstant?: unknown;
-      androidwrapper?: unknown;
-      webkit?: { messageHandlers?: { iosWrapper?: unknown } };
-
-      // GLOV ui.js
-      Z: Record<string, number>;
-
       // GLOV bootstrap
       debugmsg: (msg: string, clear: boolean) => void;
-
-      // GLOV profiler
-      profilerStart: (name: string, count?: number) => void;
-      profilerStop: (name: string) => void;
-      profilerStopStart: (name: string, count?: number) => void;
+      Z: Record<string, number>;
     }
+
+    const BUILD_TIMESTAMP: string;
+    const __funcname: string; // eslint-disable-line no-underscore-dangle
+
+    // GLOV ui.js
+    const Z: Record<string, number>;
+    // GL context
+    let gl: WebGLRenderingContext | WebGL2RenderingContext;
+    // GLOV profiler
+    function profilerStart(name: string): void;
+    function profilerStop(name?: string): void;
+    function profilerStopStart(name: string): void;
+    function profilerStartFunc(): void;
+    function profilerStopFunc(): void;
   }
 }

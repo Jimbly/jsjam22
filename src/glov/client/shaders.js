@@ -3,20 +3,7 @@
 
 export const MAX_SEMANTIC = 5;
 
-/* eslint-disable import/order */
-const assert = require('assert');
-const engine = require('./engine.js');
-const { errorReportClear, errorReportSetDetails, glovErrorReport } = require('./error_report.js');
-const { filewatchOn } = require('./filewatch.js');
-const { matchAll, nop } = require('glov/common/util.js');
-const { texturesUnloadDynamic } = require('./textures.js');
-const { webFSGetFile } = require('./webfs.js');
-
-let last_id = 0;
-
-let bound_prog = null;
-
-export const semantic = {
+export const SEMANTIC = {
   'ATTR0': 0,
   'POSITION': 0,
   'ATTR1': 1,
@@ -30,6 +17,24 @@ export const semantic = {
   'ATTR4': 4,
   'TEXCOORD_1': 4,
 };
+
+/* eslint-disable import/order */
+const assert = require('assert');
+const engine = require('./engine.js');
+const {
+  errorReportClear,
+  errorReportSetDetails,
+  errorReportSetDynamicDetails,
+  glovErrorReport,
+} = require('./error_report.js');
+const { filewatchOn } = require('./filewatch.js');
+const { matchAll, nop } = require('glov/common/util.js');
+const { textureUnloadDynamic } = require('./textures.js');
+const { webFSGetFile } = require('./webfs.js');
+
+let last_id = 0;
+
+let bound_prog = null;
 
 export let globals;
 let globals_used;
@@ -81,7 +86,7 @@ export function shadersResetState() {
   gl.useProgram(null);
 }
 
-function setGLErrorReportDetails() {
+export function shadersSetGLErrorReportDetails() {
   // Set some debug details we might want
   let details = {
     max_fragment_uniform_vectors: gl.getParameter(gl.MAX_FRAGMENT_UNIFORM_VECTORS),
@@ -102,26 +107,34 @@ function setGLErrorReportDetails() {
   }
 }
 
-let report_queued = false;
+errorReportSetDynamicDetails('context_lost', function () {
+  if (window.gl && gl.isContextLost()) {
+    return '1';
+  }
+  return '';
+});
+
+let report_timeout = null;
 let shader_errors;
 let shader_errors_any_fatal;
 let reported_shader_errors = false;
 function reportShaderError(non_fatal, err) {
   function doReport() {
-    report_queued = false;
-    setGLErrorReportDetails();
+    report_timeout = null;
     let msg = `Shader error(s):\n    ${shader_errors.join('\n    ')}`;
-    reported_shader_errors = true;
-    if (!shader_errors_any_fatal) {
-      glovErrorReport(false, msg, 'shaders.js');
-    } else {
-      assert(false, msg);
-    }
     shader_errors = null;
+    if (!gl.isContextLost()) {
+      shadersSetGLErrorReportDetails();
+      reported_shader_errors = true;
+      if (!shader_errors_any_fatal) {
+        glovErrorReport(false, msg, 'shaders.js');
+      } else {
+        assert(false, msg);
+      }
+    }
   }
-  if (!report_queued) {
-    setTimeout(doReport, 1000);
-    report_queued = true;
+  if (!report_timeout) {
+    report_timeout = setTimeout(doReport, 1000);
     shader_errors = [];
     shader_errors_any_fatal = false;
   }
@@ -220,8 +233,8 @@ Shader.prototype.compile = function () {
   if (type === gl.VERTEX_SHADER) {
     this.attributes = matchAll(text, vp_attr_regex);
     // Ensure they are known names so we can give them indices
-    // Add to semantic[] above as needed
-    this.attributes.forEach((v) => assert(semantic[v] !== undefined));
+    // Add to SEMANTIC[] above as needed
+    this.attributes.forEach((v) => assert(SEMANTIC[v] !== undefined));
   } else {
     this.samplers = matchAll(text, sampler_regex);
     // Ensure all samplers end in a unique number
@@ -240,6 +253,20 @@ Shader.prototype.compile = function () {
     assert(type_size[type_name]);
   });
   this.shader_source_text = text;
+
+  if (gl.isContextLost()) {
+    // will throw in gl.shaderSource on iOS or presumably error on other platforms
+    this.valid = false;
+    let error_text = this.error_text = 'Context lost';
+    if (this.defines_arr.length) {
+      filename += `(${this.defines_arr.join(',')})`;
+    }
+    console[this.non_fatal ? 'warn' : 'error'](`Error compiling ${filename}: ${error_text}`);
+    // Just silently fail, presumably context lost because the tab is being closed
+    // reportShaderError(this.non_fatal, `${filename}: ${error_text}`);
+    return;
+  }
+
   gl.shaderSource(this.shader, text);
   gl.compileShader(this.shader);
 
@@ -260,7 +287,7 @@ Shader.prototype.compile = function () {
   }
 };
 
-export function create(filename) {
+export function shaderCreate(filename) {
   if (typeof filename === 'object') {
     return new Shader(filename);
   }
@@ -303,28 +330,39 @@ function link(vp, fp, on_error) {
     handle: gl.createProgram(),
     uniforms: null,
   };
+  let error_text;
   if (!prog.handle) {
-    assert(false, `gl.createProgram() returned ${prog.handle}${gl.createProgram() ? ', retry would succeed' : ''}`);
-  }
-  gl.attachShader(prog.handle, vp.shader);
-  gl.attachShader(prog.handle, fp.shader);
-  // call this for all relevant semantic
-  for (let ii = 0; ii < vp.attributes.length; ++ii) {
-    gl.bindAttribLocation(prog.handle, semantic[vp.attributes[ii]], vp.attributes[ii]);
-  }
-  gl.linkProgram(prog.handle);
+    // Presumably due to context loss?
+    error_text = `gl.createProgram() returned ${prog.handle}`;
+    prog.valid = false;
+  } else {
+    gl.attachShader(prog.handle, vp.shader);
+    gl.attachShader(prog.handle, fp.shader);
+    // call this for all relevant semantic
+    for (let ii = 0; ii < vp.attributes.length; ++ii) {
+      gl.bindAttribLocation(prog.handle, SEMANTIC[vp.attributes[ii]], vp.attributes[ii]);
+    }
+    gl.linkProgram(prog.handle);
 
-  prog.valid = gl.getProgramParameter(prog.handle, gl.LINK_STATUS);
+    prog.valid = gl.getProgramParameter(prog.handle, gl.LINK_STATUS);
+  }
   if (!prog.valid) {
-    let error_text = cleanShaderError(gl.getProgramInfoLog(prog.handle));
+    error_text = error_text || cleanShaderError(gl.getProgramInfoLog(prog.handle));
+    let report = true;
+    if (gl.isContextLost()) {
+      error_text = `(Context lost) ${error_text}`;
+      report = false;
+    }
     console.error(`Shader link error: ${error_text}`);
     // Currently, not calling on_error if `engine.DEBUG`, we want to see our
     //   shader errors immediately!
     if (on_error && (!engine.DEBUG || on_error === nop)) {
       on_error(error_text);
     } else {
-      reportShaderError(false, `Shader link error (${vp.filename} & ${fp.filename}):` +
-        ` ${error_text}`);
+      if (report) {
+        reportShaderError(false, `Shader link error (${vp.filename} & ${fp.filename}):` +
+          ` ${error_text}`);
+      }
     }
     prog.uniforms = [];
     return prog;
@@ -403,7 +441,7 @@ function autoLink(vp, fp, on_error) {
   return prog;
 }
 
-export function bind(vp, fp, params) {
+export function shadersBind(vp, fp, params) {
   let prog = vp.programs[fp.id];
   if (!prog) {
     prog = autoLink(vp, fp);
@@ -434,11 +472,11 @@ export function bind(vp, fp, params) {
   }
 }
 
-export function prelink(vp, fp, params = {}, on_error) {
+export function shadersPrelink(vp, fp, params = {}, on_error) {
   let prog = autoLink(vp, fp, on_error);
   // In theory, only need to link, not bind, but let's push it through the pipe as far as it can to be safe.
   if (prog.valid) {
-    bind(vp, fp, params);
+    shadersBind(vp, fp, params);
   }
   return prog.valid;
 }
@@ -475,16 +513,16 @@ function shaderReload() {
     for (let ii = 0; ii < shaders.length; ++ii) {
       shaders[ii].compile();
     }
-    texturesUnloadDynamic();
+    textureUnloadDynamic();
   }
 }
 
-export function handleDefinesChanged() {
+export function shadersHandleDefinesChanged() {
   applyDefines();
   shaderReload();
 }
 
-export function setInternalDefines(new_values) {
+export function shadersSetInternalDefines(new_values) {
   for (let key in new_values) {
     if (new_values[key]) {
       internal_defines[key] = new_values[key];
@@ -492,29 +530,36 @@ export function setInternalDefines(new_values) {
       delete internal_defines[key];
     }
   }
-  handleDefinesChanged();
+  shadersHandleDefinesChanged();
 }
 
 function onShaderChange(filename) {
   shaderReload();
 }
 
-export function startup(_globals) {
+export function shadersStartup(_globals) {
   applyDefines();
   globals = _globals;
   globals_used = {};
 
-  error_fp = create('shaders/error.fp');
+  error_fp = shaderCreate('shaders/error.fp');
   if (engine.webgl2) {
-    error_fp_webgl2 = create('shaders/error_gl2.fp');
+    error_fp_webgl2 = shaderCreate('shaders/error_gl2.fp');
   }
-  error_vp = create('shaders/error.vp');
+  error_vp = shaderCreate('shaders/error.vp');
 
   filewatchOn('.fp', onShaderChange);
   filewatchOn('.vp', onShaderChange);
+
+  let valid = error_fp.valid && error_vp.valid;
+  if (!valid) {
+    // do _not_ send immediate error reports about these, we have an invalid context of some kind
+    clearTimeout(report_timeout);
+  }
+  return valid;
 }
 
-export function addGlobal(key, vec) {
+export function shadersAddGlobal(key, vec) {
   assert(!globals[key]);
   assert(!globals_used[key]); // A shader has already been prelinked referencing this global
   globals[key] = vec;
@@ -522,3 +567,10 @@ export function addGlobal(key, vec) {
     assert(isFinite(vec[ii]));
   }
 }
+
+// Legacy APIs
+exports.create = shaderCreate;
+exports.semantic = SEMANTIC;
+exports.addGlobal = shadersAddGlobal;
+exports.bind = shadersBind;
+exports.prelink = shadersPrelink;

@@ -18,6 +18,11 @@ export let default_config_options = {
   master_ready_timeout: 60000,
   // Flags that are propagated from a user's public.permissions onto their per-message identity
   permission_flags: ['sysadmin'],
+  // What permission flags grant ability to use reserved words when renaming user and logging in
+  display_name_bypass_flags: ['sysadmin'],
+  // Modules to import before creating exchanges
+  // Using string template so that glov-build-preresolve doesn't munge it
+  exchange_providers: [`glov${'/server/exchange_gmx_client'}`],
 };
 
 let default_env_options = {
@@ -57,6 +62,8 @@ function determinEnv() {
   if (argv.env || server_config.env) {
     // explicitly specified, use it
     env = argv.env || server_config.env;
+  } else if (process.env.CONFIG_ENV) {
+    env = process.env.CONFIG_ENV;
   } else if (process.env.GKE_PROJECTNAME) {
     env = process.env.GKE_PROJECTNAME;
   } else if (process.env.PODNAME) {

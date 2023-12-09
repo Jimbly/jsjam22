@@ -4,22 +4,26 @@
 /* eslint-disable import/order */
 const assert = require('assert');
 const engine = require('./engine.js');
-const { style } = require('./font.js');
+const { fontStyle } = require('./font.js');
 const camera2d = require('./camera2d.js');
 const in_event = require('./in_event.js');
 const input = require('./input.js');
 const { abs } = Math;
-const { uiGetDOMElem } = require('./ui.js');
+const {
+  playUISound,
+  uiGetDOMElem,
+} = require('./ui.js');
 const ui = require('./ui.js');
+const { uiStyleCurrent } = require('./uistyle.js');
 const settings = require('./settings.js');
 const { SPOT_DEFAULT_BUTTON, spot, spotFocusSteal, spotKey } = require('./spot.js');
 
-let style_link_default = style(null, {
+let style_link_default = fontStyle(null, {
   color: 0x5040FFff,
   outline_width: 1.0,
   outline_color: 0x00000020,
 });
-let style_link_hover_default = style(null, {
+let style_link_hover_default = fontStyle(null, {
   color: 0x0000FFff,
   outline_width: 1.0,
   outline_color: 0x00000020,
@@ -27,6 +31,11 @@ let style_link_hover_default = style(null, {
 
 export function linkGetDefaultStyle() {
   return style_link_default;
+}
+
+export function linkSetDefaultStyle(style_link, style_link_hover) {
+  style_link_default = style_link;
+  style_link_hover_default = style_link_hover;
 }
 
 let state_cache = {};
@@ -124,10 +133,11 @@ export function link(param) {
 }
 
 export function linkText(param) {
-  let { style_link, style_link_hover, x, y, z, font_size, text, url, internal } = param;
+  let { style_link, style_link_hover, x, y, z, style, font_size, text, url, internal } = param;
   text = text || url;
   z = z || Z.UI;
-  font_size = font_size || ui.font_height;
+  style = style || uiStyleCurrent();
+  font_size = font_size || style.text_height;
   // Also: any parameter to link(), e.g. url
   let w = ui.font.getStringWidth(style_link || style_link_default, font_size, text);
   let h = font_size;
@@ -143,6 +153,10 @@ export function linkText(param) {
   ui.drawLine(x, y + h - underline_w, x + w, y + h - underline_w, z - 0.5, underline_w, 1, style_use.color_vec4);
   let clicked = link(param);
   if (clicked) {
+    const sound_button = param.sound_button === undefined ? param.def.sound_button : param.sound_button;
+    if (sound_button) {
+      playUISound(sound_button);
+    }
     spotFocusSteal(param);
   }
   if (spot_ret.ret && !internal) {

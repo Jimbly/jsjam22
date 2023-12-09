@@ -73,10 +73,11 @@ module.exports = function (filename) {
 
   requireVersions({
     'nodejs': '16.13.0',
-    'glov-build': '0.0.35',
-    'glov-build-browserify': '0.0.4',
-    'glov-build-concat': '0.0.8',
-    'glov-build-preresolve': '0.2.0',
+    'glov-build': '1.0.43',
+    'glov-build-browserify': '1.0.8',
+    'glov-build-cache': '1.1.0',
+    'glov-build-concat': '1.0.10',
+    'glov-build-preresolve': '1.2.0',
     '@jimbly/howler': '0.0.9',
     '@jimbly/babel-plugin-transform-modules-simple-commonjs': '0.0.3',
   });

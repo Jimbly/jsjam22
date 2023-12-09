@@ -18,12 +18,15 @@ export function packetLog(source, pak, buf_offs, msg) {
   // Copy first PKT_LOG_BUF_SIZE bytes for logging
   let buf = pak.getBuffer();
   let buf_len = pak.getBufferLen();
-  let data_len = min(PKT_LOG_BUF_SIZE, buf_len - buf_offs);
+  let total_data_len = buf_len - buf_offs;
+  let data_len = min(PKT_LOG_BUF_SIZE, total_data_len);
   ple.ts = Date.now();
   ple.source = source;
   Buffer.prototype.copy.call(buf, ple.data, 0, buf_offs, buf_offs + data_len);
   ple.data_len = data_len;
   receiver.pkt_log_idx = (receiver.pkt_log_idx + 1) % PKT_LOG_SIZE;
 
-  perfCounterAdd(`${receiver.perf_prefix}${typeof msg === 'number' ? 'ack' : msg}`);
+  perfCounterAdd(`${receiver.perf_prefix}${msg}`);
+
+  receiver.pkg_log_last_size = total_data_len;
 }
