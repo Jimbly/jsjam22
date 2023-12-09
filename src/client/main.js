@@ -2,6 +2,13 @@
 const local_storage = require('glov/client/local_storage.js');
 local_storage.setStoragePrefix('jsjam22'); // Before requiring anything else that might load from this
 
+const { platformRegister } = require('glov/common/platform.js');
+platformRegister('itch', {
+  devmode: 'auto',
+  reload: true,
+  reload_updates: true,
+});
+
 // Virtual viewport for our game logic
 export const game_width = 640 - 12;
 export const game_height = 384;
