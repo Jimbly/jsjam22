@@ -2311,6 +2311,7 @@ function stateMenu() {
       game_state = gameStateCreate(INITIAL_GAME_SEED);
     }
     engine.setState(statePlay);
+    speed = SPEED_PLAY;
     transition.queue(Z.TRANSITION_FINAL, transition.pixelate(500));
   }
   x += button_w + pad;
